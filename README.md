@@ -53,7 +53,7 @@ pip install bilt
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/bilt.git
+git clone https://github.com/Rikiza89/bilt.git
 cd bilt
 pip install -e .
 ```
@@ -440,8 +440,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📬 Contact
 
-- GitHub Issues: [Report bugs or request features](https://github.com/yourusername/bilt/issues)
-- Email: your.email@example.com
+- GitHub Issues: [Report bugs or request features](https://github.com/Rikiza89/bilt/issues)
 
 ---
 
@@ -462,6 +461,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ by the BILT Team**
 
-[⭐ Star us on GitHub](https://github.com/yourusername/bilt) | [📖 Documentation](https://bilt.readthedocs.io) | [💬 Discussions](https://github.com/yourusername/bilt/discussions)
+[⭐ Star us on GitHub](https://github.com/Rikiza89/bilt) | [📖 Documentation](https://bilt.readthedocs.io) | [💬 Discussions](https://github.com/Rikiza89/bilt/discussions)
 
 </div>
