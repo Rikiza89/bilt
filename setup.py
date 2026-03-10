@@ -11,17 +11,16 @@ if readme_path.exists():
 setup(
     name="bilt",
     version="0.1.0",
-    author="BILT Contributors",
+    author="Rikiza89",
     description="BILT (Because I Like Twice) - A PyTorch-based object detection library",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/bilt",
+    url="https://github.com/Rikiza89/bilt",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 1 - Alpha",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
@@ -54,4 +53,5 @@ setup(
             # Future CLI can be added here
         ],
     },
+
 )
