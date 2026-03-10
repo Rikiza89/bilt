@@ -45,9 +45,9 @@ viz = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/bilt"
-Repository = "https://github.com/yourusername/bilt"
-Documentation = "https://github.com/yourusername/bilt"
+Homepage = "https://github.com/Rikiza89/bilt"
+Repository = "https://github.com/Rikiza89/bilt"
+Documentation = "https://github.com/Rikiza89/bilt"
 
 [tool.black]
 line-length = 100
@@ -56,4 +56,5 @@ target-version = ['py38', 'py39', 'py310', 'py311']
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+
 addopts = "-v --cov=bilt --cov-report=term-missing"
