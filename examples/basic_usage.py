@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 """
 Basic usage examples for BILT library.
 """
@@ -75,5 +77,6 @@ results3 = model.predict(img_array)
 
 # From list
 results4 = model.predict(["img1.jpg", "img2.jpg", "img3.jpg"])
+
 
 print("All input types work!")
