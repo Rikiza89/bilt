@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import logging
 import torch
 from pathlib import Path
@@ -212,4 +214,5 @@ def validate_dataset_structure(dataset_path: Path) -> tuple:
     if len(train_images) == 0:
         return False, "No training images found"
     
+
     return True, "Dataset structure valid"
