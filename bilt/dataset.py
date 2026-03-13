@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
@@ -202,4 +204,5 @@ def create_dataloader(
         persistent_workers=False
     )
     
+
     return dataloader, dataset.num_classes
