@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 from pathlib import Path
 from typing import Dict, List, Any
@@ -81,4 +83,5 @@ class Evaluator:
         
         logger.info(f"Evaluation complete: {results}")
         
+
         return results
