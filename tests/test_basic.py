@@ -13,7 +13,7 @@ import tempfile
 import shutil
 
 from bilt import BILT
-from bilt.utils import parse_yolo_label, validate_dataset_structure
+from bilt.utils import parse_bilt_label, validate_dataset_structure
 
 
 class TestBILT:
@@ -48,7 +48,7 @@ class TestUtils:
             label_path = Path(f.name)
         
         try:
-            annotations = parse_yolo_label(label_path, 640, 480)
+            annotations = parse_bilt_label(label_path, 640, 480)
             
             assert len(annotations) == 2
             assert annotations[0]['class_id'] == 0
@@ -149,3 +149,4 @@ class TestInference:
 if __name__ == "__main__":
 
     pytest.main([__file__, "-v"])
+
