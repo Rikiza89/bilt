@@ -1,5 +1,5 @@
 """
-BILT (Because I Like Twice) - A PyTorch-based object detection library.
+BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
 
 Example usage:
     from bilt import BILT
@@ -18,4 +18,5 @@ from .model import BILT
 from .utils import set_logging_level
 
 __version__ = "0.1.0"
+
 __all__ = ["BILT", "set_logging_level"]
