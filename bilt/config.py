@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import platform
 import os
 
@@ -43,4 +45,5 @@ class Config:
     if IS_RASPBERRY_PI:
         import torch
         torch.set_num_threads(2)
+
         os.environ['OMP_NUM_THREADS'] = '2'
