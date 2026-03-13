@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 import torch.nn as nn
 from torchvision.models.detection import ssdlite320_mobilenet_v3_large, SSDLite320_MobileNet_V3_Large_Weights
@@ -110,4 +112,5 @@ def get_lr_scheduler(optimizer, num_epochs: int):
         optimizer,
         T_max=num_epochs,
         eta_min=1e-6
+
     )
