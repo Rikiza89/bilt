@@ -30,7 +30,7 @@ def set_logging_level(level: str = "INFO"):
     logging.getLogger("bilt").setLevel(level_map.get(level.upper(), logging.INFO))
 
 
-def parse_yolo_label(
+def parse_bilt_label(
     label_path: Path,
     img_width: int,
     img_height: int
@@ -216,3 +216,4 @@ def validate_dataset_structure(dataset_path: Path) -> tuple:
     
 
     return True, "Dataset structure valid"
+
