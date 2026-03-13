@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
@@ -215,4 +217,5 @@ class Trainer:
             'best_val_loss': best_val_loss,
             'training_time': training_time,
             'model_path': str(save_path)
+
         }
