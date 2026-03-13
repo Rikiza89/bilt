@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 from setuptools import setup, find_packages
 from pathlib import Path
 
@@ -55,3 +57,4 @@ setup(
     },
 
 )
+
