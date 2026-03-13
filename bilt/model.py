@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -417,4 +419,5 @@ class Results:
                 plt.axis('off')
                 plt.show()
         except ImportError:
+
             logger.error("matplotlib required for show(). Use save() instead.")
