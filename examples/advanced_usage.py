@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 """
 Advanced usage examples for BILT library.
 """
@@ -118,4 +120,5 @@ model = BILT("weights/best.pth")
 print(f"Model: {model}")
 print(f"Classes: {model.names}")
 print(f"Number of classes: {model.num_classes}")
+
 print(f"Device: {model.device}")
