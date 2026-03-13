@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 """
 Basic tests for BILT library.
 """
@@ -145,4 +147,5 @@ class TestInference:
 
 
 if __name__ == "__main__":
+
     pytest.main([__file__, "-v"])
