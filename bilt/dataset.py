@@ -7,7 +7,7 @@ from PIL import Image
 import torchvision.transforms as T
 from typing import List, Tuple, Dict, Any
 
-from .utils import parse_yolo_label, load_yaml_classes, get_logger
+from .utils import parse_bilt_label, load_yaml_classes, get_logger
 
 logger = get_logger(__name__)
 
@@ -80,7 +80,7 @@ class ObjectDetectionDataset(Dataset):
             orig_width, orig_height = 640, 640
         
         # Parse annotations
-        annotations = parse_yolo_label(label_path, orig_width, orig_height)
+        annotations = parse_bilt_label(label_path, orig_width, orig_height)
         
         # Convert to tensors and remap class IDs
         if len(annotations) > 0:
@@ -206,3 +206,4 @@ def create_dataloader(
     
 
     return dataloader, dataset.num_classes
+
