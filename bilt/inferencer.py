@@ -1,3 +1,5 @@
+# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+
 import torch
 import torchvision.transforms as T
 from PIL import Image
@@ -185,4 +187,5 @@ class Inferencer:
             return self.detect(image)
         except Exception as e:
             logger.error(f"Failed to process image {image_path}: {e}")
+
             return []
