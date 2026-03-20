@@ -1,152 +1,241 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2024 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 """
-Basic tests for BILT library.
+Basic unit tests for BILT.
+
+Run with:  pytest tests/test_basic.py -v
 """
 
+import shutil
+import tempfile
+from pathlib import Path
+
+import numpy as np
 import pytest
 import torch
-from pathlib import Path
 from PIL import Image
-import numpy as np
-import tempfile
-import shutil
 
 from bilt import BILT
 from bilt.utils import parse_bilt_label, validate_dataset_structure
+from bilt.variants import get_variant_config, is_variant_name, VARIANT_CONFIGS
 
+
+# ---------------------------------------------------------------------------
+# BILT API tests
+# ---------------------------------------------------------------------------
 
 class TestBILT:
-    """Test BILT main class."""
-    
-    def test_init_empty(self):
-        """Test initialization without weights."""
+    """Test the main BILT class."""
+
+    def test_init_no_weights(self):
         model = BILT()
         assert model.model is None
         assert model.class_names is None
-    
-    def test_device_selection(self):
-        """Test device selection."""
-        model_cpu = BILT(device="cpu")
-        assert model_cpu.device == torch.device("cpu")
-    
-    def test_repr(self):
-        """Test string representation."""
-        model = BILT()
-        assert "untrained" in str(model)
 
+    def test_init_variant_name(self):
+        """Passing a variant name stores it but does NOT build the model."""
+        for name in ["spark", "flash", "core", "pro", "max"]:
+            model = BILT(name)
+            assert model.model is None
+            assert model.variant == name
+
+    def test_init_variant_aliases(self):
+        for alias, canonical in [("n", "spark"), ("s", "flash"), ("m", "core"),
+                                  ("l", "pro"), ("x", "max")]:
+            model = BILT(alias)
+            assert model.variant == canonical
+
+    def test_device_cpu(self):
+        model = BILT(device="cpu")
+        assert model.device == torch.device("cpu")
+
+    def test_repr_unloaded(self):
+        model = BILT("core")
+        r = repr(model)
+        assert "core" in r
+        assert "unloaded" in r
+
+    def test_variants_static(self):
+        """BILT.variants() should not raise."""
+        BILT.variants()
+
+
+# ---------------------------------------------------------------------------
+# Variant configuration tests
+# ---------------------------------------------------------------------------
+
+class TestVariants:
+    """Test variant configuration helpers."""
+
+    def test_all_variants_present(self):
+        for name in ["spark", "flash", "core", "pro", "max"]:
+            cfg = get_variant_config(name)
+            assert "backbone" in cfg
+            assert "input_size" in cfg
+            assert "fpn_channels" in cfg
+
+    def test_aliases_resolve(self):
+        assert get_variant_config("n")["backbone"] == get_variant_config("spark")["backbone"]
+        assert get_variant_config("x")["backbone"] == get_variant_config("max")["backbone"]
+
+    def test_unknown_variant_raises(self):
+        with pytest.raises(ValueError):
+            get_variant_config("unknown_variant_xyz")
+
+    def test_is_variant_name(self):
+        assert is_variant_name("spark")
+        assert is_variant_name("core")
+        assert is_variant_name("n")
+        assert not is_variant_name("weights/best.pth")
+        assert not is_variant_name("somefile.pth")
+
+
+# ---------------------------------------------------------------------------
+# Utility tests
+# ---------------------------------------------------------------------------
 
 class TestUtils:
     """Test utility functions."""
-    
-    def test_parse_yolo_label(self):
-        """Test YOLO label parsing."""
-        # Create temporary label file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+
+    def test_parse_label_basic(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("0 0.5 0.5 0.4 0.6\n")
             f.write("1 0.3 0.3 0.2 0.2\n")
-            label_path = Path(f.name)
-        
+            lbl = Path(f.name)
         try:
-            annotations = parse_bilt_label(label_path, 640, 480)
-            
-            assert len(annotations) == 2
-            assert annotations[0]['class_id'] == 0
-            assert annotations[1]['class_id'] == 1
-            
-            # Check bbox format [x_min, y_min, x_max, y_max]
-            bbox = annotations[0]['bbox']
-            assert len(bbox) == 4
-            assert all(isinstance(v, float) for v in bbox)
+            anns = parse_bilt_label(lbl, 640, 480)
+            assert len(anns) == 2
+            assert anns[0]["class_id"] == 0
+            assert anns[1]["class_id"] == 1
+            assert len(anns[0]["bbox"]) == 4
         finally:
-            label_path.unlink()
-    
-    def test_validate_dataset_structure(self):
-        """Test dataset structure validation."""
-        # Create temporary dataset structure
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dataset_path = Path(tmpdir)
-            
-            # Create required directories
-            (dataset_path / "train" / "images").mkdir(parents=True)
-            (dataset_path / "train" / "labels").mkdir(parents=True)
-            (dataset_path / "val" / "images").mkdir(parents=True)
-            (dataset_path / "val" / "labels").mkdir(parents=True)
-            
-            # Add dummy image
-            img = Image.new('RGB', (100, 100))
-            img.save(dataset_path / "train" / "images" / "test.jpg")
-            
-            valid, message = validate_dataset_structure(dataset_path)
-            assert valid
-            assert "valid" in message.lower()
-    
-    def test_validate_invalid_structure(self):
-        """Test validation with invalid structure."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dataset_path = Path(tmpdir)
-            valid, message = validate_dataset_structure(dataset_path)
-            assert not valid
+            lbl.unlink()
 
+    def test_parse_label_missing_file(self):
+        anns = parse_bilt_label(Path("nonexistent.txt"), 640, 480)
+        assert anns == []
+
+    def test_validate_dataset_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dp = Path(tmp)
+            for split in ["train", "val"]:
+                (dp / split / "images").mkdir(parents=True)
+                (dp / split / "labels").mkdir(parents=True)
+            # Add at least one image
+            Image.new("RGB", (64, 64)).save(dp / "train" / "images" / "a.jpg")
+            ok, msg = validate_dataset_structure(dp)
+            assert ok
+
+    def test_validate_dataset_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok, msg = validate_dataset_structure(Path(tmp))
+            assert not ok
+
+
+# ---------------------------------------------------------------------------
+# Dataset tests
+# ---------------------------------------------------------------------------
 
 class TestDataset:
-    """Test dataset functionality."""
-    
+    """Test ObjectDetectionDataset."""
+
     def setup_method(self):
-        """Setup test dataset."""
-        self.tmpdir = tempfile.mkdtemp()
-        self.dataset_path = Path(self.tmpdir)
-        
-        # Create structure
-        images_dir = self.dataset_path / "images"
-        labels_dir = self.dataset_path / "labels"
-        images_dir.mkdir(parents=True)
-        labels_dir.mkdir(parents=True)
-        
-        # Create test image
-        img = Image.new('RGB', (640, 480), color='red')
-        img.save(images_dir / "test.jpg")
-        
-        # Create test label
-        with open(labels_dir / "test.txt", 'w') as f:
-            f.write("0 0.5 0.5 0.3 0.4\n")
-    
+        self.tmp = tempfile.mkdtemp()
+        dp = Path(self.tmp)
+        img_dir = dp / "images"
+        lbl_dir = dp / "labels"
+        img_dir.mkdir(parents=True)
+        lbl_dir.mkdir(parents=True)
+
+        Image.new("RGB", (320, 240), "blue").save(img_dir / "t.jpg")
+        (lbl_dir / "t.txt").write_text("0 0.5 0.5 0.3 0.4\n")
+
+        self.img_dir = img_dir
+        self.lbl_dir = lbl_dir
+
     def teardown_method(self):
-        """Cleanup test dataset."""
-        shutil.rmtree(self.tmpdir)
-    
-    def test_dataset_loading(self):
-        """Test dataset can be loaded."""
+        shutil.rmtree(self.tmp)
+
+    def test_dataset_loads(self):
         from bilt.dataset import ObjectDetectionDataset, get_transforms
-        
-        dataset = ObjectDetectionDataset(
-            images_dir=self.dataset_path / "images",
-            labels_dir=self.dataset_path / "labels",
-            transforms=get_transforms(640, training=True),
-            input_size=640
+
+        ds = ObjectDetectionDataset(
+            images_dir=self.img_dir,
+            labels_dir=self.lbl_dir,
+            transforms=get_transforms(320, training=True),
+            input_size=320,
         )
-        
-        assert len(dataset) == 1
-        assert dataset.num_classes > 0
-        
-        # Test __getitem__
-        img, target = dataset[0]
+        assert len(ds) == 1
+        img, target = ds[0]
         assert isinstance(img, torch.Tensor)
-        assert 'boxes' in target
-        assert 'labels' in target
+        assert img.shape[0] == 3          # RGB channels
+        assert "boxes" in target
+        assert "labels" in target
+
+    def test_labels_are_one_indexed(self):
+        """Labels stored as 1-indexed (0 = background reserved for anchors)."""
+        from bilt.dataset import ObjectDetectionDataset, get_transforms
+
+        ds = ObjectDetectionDataset(
+            images_dir=self.img_dir,
+            labels_dir=self.lbl_dir,
+            transforms=get_transforms(320),
+            input_size=320,
+        )
+        _, target = ds[0]
+        if target["labels"].numel() > 0:
+            assert (target["labels"] >= 1).all()
 
 
-class TestInference:
-    """Test inference functionality."""
-    
-    def test_predict_input_types(self):
-        """Test different input types for prediction."""
-        # This would require a trained model
-        # Placeholder test structure
-        pass
+# ---------------------------------------------------------------------------
+# Architecture smoke tests (no training, no weights)
+# ---------------------------------------------------------------------------
+
+class TestArchitecture:
+    """Instantiate each variant and do a forward pass."""
+
+    @pytest.mark.parametrize("variant", ["spark", "core"])
+    def test_detector_forward_inference(self, variant):
+        from bilt.core import BILTDetector
+
+        cfg = get_variant_config(variant)
+        det = BILTDetector(variant, num_classes=3, pretrained_backbone=False)
+        det.eval()
+
+        h = w = cfg["input_size"]
+        x = torch.zeros(1, 3, h, w)
+        with torch.no_grad():
+            out = det(x)
+
+        assert isinstance(out, list)
+        assert len(out) == 1
+        assert "boxes" in out[0]
+        assert "scores" in out[0]
+        assert "labels" in out[0]
+
+    @pytest.mark.parametrize("variant", ["spark", "core"])
+    def test_detector_forward_training(self, variant):
+        from bilt.core import BILTDetector
+
+        cfg = get_variant_config(variant)
+        det = BILTDetector(variant, num_classes=3, pretrained_backbone=False)
+        det.train()
+
+        h = w = cfg["input_size"]
+        x = torch.zeros(2, 3, h, w)
+        targets = [
+            {
+                "boxes":  torch.tensor([[10.0, 10.0, 50.0, 50.0]]),
+                "labels": torch.tensor([1]),
+            }
+        ] * 2
+        loss = det(x, targets)
+
+        assert "total" in loss
+        assert loss["total"].item() >= 0.0
 
 
 if __name__ == "__main__":
-
     pytest.main([__file__, "-v"])
-

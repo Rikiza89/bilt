@@ -1,191 +1,210 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2024 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
+
+"""
+BILT inference engine.
+
+Handles image preprocessing (resize + ImageNet normalisation), model
+invocation, postprocessing (confidence filter + per-class NMS) and
+coordinate scaling back to the original image space.
+"""
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import torch
 import torchvision.transforms as T
 from PIL import Image
-from pathlib import Path
-from typing import List, Dict, Any
 
-from .utils import get_logger, apply_nms
+from .backbone import IMAGENET_MEAN, IMAGENET_STD
+from .utils import get_logger
 
 logger = get_logger(__name__)
 
 
 class Inferencer:
-    """CPU-optimized inference engine with proper coordinate handling."""
-    
+    """
+    Image-to-detections inference wrapper.
+
+    Parameters
+    ----------
+    model                : BILTDetector  (in eval mode, on *device*)
+    class_names          : list of str
+    confidence_threshold : float  minimum score to keep a detection
+    nms_threshold        : float  IoU threshold for NMS
+    input_size           : int    resize images to (input_size, input_size)
+    device               : torch.device
+    """
+
     def __init__(
         self,
         model,
         class_names: List[str],
-        confidence_threshold: float = 0.5,
-        nms_threshold: float = 0.4,
-        input_size: int = 640,
-        device: torch.device = None
+        confidence_threshold: float = 0.25,
+        nms_threshold: float = 0.45,
+        input_size: int = 512,
+        device: Optional[torch.device] = None,
     ):
         self.model = model
         self.class_names = class_names
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
-        
-        self.device = device if device else torch.device('cpu')
+        self.device = device or torch.device("cpu")
+
         self.model.to(self.device)
         self.model.eval()
-        
-        # Simple transform
-        self.transforms = T.Compose([T.ToTensor()])
-        
+
+        self._build_transforms()
+
         logger.info(
-            f"Inferencer initialized - "
-            f"Classes: {len(class_names)}, "
-            f"Confidence: {confidence_threshold}, "
-            f"NMS: {nms_threshold}"
+            f"Inferencer: {len(class_names)} classes | "
+            f"conf={confidence_threshold} | nms_iou={nms_threshold} | "
+            f"size={input_size}"
         )
-    
-    def preprocess_image(self, image: Image.Image) -> tuple:
+
+    # ---------------------------------------------------------------------- #
+
+    def _build_transforms(self) -> None:
+        """Rebuild the preprocessing pipeline for the current input_size."""
+        self._transforms = T.Compose([
+            T.Resize((self.input_size, self.input_size)),
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+
+    # ---------------------------------------------------------------------- #
+
+    def preprocess_image(self, image: Image.Image):
         """
-        Preprocess image for inference.
-        Returns: (tensor, original_size)
+        Convert a PIL image to a normalised tensor and record the original size.
+
+        Returns
+        -------
+        tensor       : (1, 3, input_size, input_size)
+        original_size: (width, height)
         """
-        original_size = image.size  # (width, height)
-        
-        # Convert to RGB if needed
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        # Convert to tensor
-        image_tensor = self.transforms(image)
-        
-        return image_tensor, original_size
-    
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        original_size = image.size  # (W, H)
+        tensor = self._transforms(image).unsqueeze(0).to(self.device)
+        return tensor, original_size
+
+    # ---------------------------------------------------------------------- #
+
     def postprocess_predictions(
         self,
-        predictions: Dict[str, torch.Tensor],
-        original_size: tuple
+        raw: Dict[str, torch.Tensor],
+        original_size: tuple,
     ) -> List[Dict[str, Any]]:
         """
-        Postprocess model predictions.
-        
-        Args:
-            predictions: Raw model output
-            original_size: (width, height) of original image
-        
-        Returns:
-            List of detections with boxes, scores, and class names
+        Convert raw model output to a list of detection dicts.
+
+        Parameters
+        ----------
+        raw           : dict with 'boxes', 'scores', 'labels' in model space
+        original_size : (W, H) of the original (pre-resize) image
+
+        Returns
+        -------
+        list of dicts:
+            bbox       : [x1, y1, x2, y2]  absolute pixel coords in original
+            score      : float
+            class_id   : int  (1-indexed)
+            class_name : str
         """
-        boxes = predictions['boxes'].cpu()
-        scores = predictions['scores'].cpu()
-        labels = predictions['labels'].cpu()
-        
-        # Filter by confidence
+        boxes  = raw["boxes"].cpu()
+        scores = raw["scores"].cpu()
+        labels = raw["labels"].cpu()
+
+        # Confidence filter
         keep = scores > self.confidence_threshold
-        boxes = boxes[keep]
-        scores = scores[keep]
-        labels = labels[keep]
-        
-        if len(boxes) == 0:
+        boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+
+        if boxes.numel() == 0:
             return []
-        
-        # Apply NMS
-        keep_indices = apply_nms(boxes, scores, self.nms_threshold)
-        boxes = boxes[keep_indices]
-        scores = scores[keep_indices]
-        labels = labels[keep_indices]
-        
-        # Clamp boxes to image bounds
-        orig_width, orig_height = original_size
-        
-        detections = []
+
+        # NMS (already applied inside the model, but we apply again with the
+        # user-supplied threshold so the user can tune it at inference time)
+        from .utils import apply_nms
+        nms_keep = apply_nms(boxes, scores, self.nms_threshold)
+        boxes  = boxes[nms_keep]
+        scores = scores[nms_keep]
+        labels = labels[nms_keep]
+
+        # Scale boxes from model-input space → original image space
+        orig_w, orig_h = original_size
+        scale_x = orig_w / self.input_size
+        scale_y = orig_h / self.input_size
+
+        detections: List[Dict[str, Any]] = []
         for box, score, label in zip(boxes, scores, labels):
             x1, y1, x2, y2 = box.tolist()
-            
-            # Clamp to image bounds
-            x1 = max(0, min(int(x1), orig_width))
-            y1 = max(0, min(int(y1), orig_height))
-            x2 = max(0, min(int(x2), orig_width))
-            y2 = max(0, min(int(y2), orig_height))
-            
-            # Skip invalid boxes
+
+            x1 = max(0, min(int(x1 * scale_x), orig_w))
+            y1 = max(0, min(int(y1 * scale_y), orig_h))
+            x2 = max(0, min(int(x2 * scale_x), orig_w))
+            y2 = max(0, min(int(y2 * scale_y), orig_h))
+
             if x2 <= x1 or y2 <= y1:
                 continue
-            
-            class_id = label.item()
-            
-            # Handle class names
-            if class_id < len(self.class_names):
-                class_name = self.class_names[class_id]
-            else:
-                class_name = f"class_{class_id}"
-            
+
+            cls_id = int(label.item())
+            cls_name = (
+                self.class_names[cls_id - 1]
+                if 0 < cls_id <= len(self.class_names)
+                else f"class_{cls_id}"
+            )
+
             detections.append({
-                'bbox': [x1, y1, x2, y2],
-                'score': float(score),
-                'class_id': int(class_id),
-                'class_name': class_name
+                "bbox":       [x1, y1, x2, y2],
+                "score":      float(score.item()),
+                "class_id":   cls_id,
+                "class_name": cls_name,
             })
-        
+
         return detections
-    
+
+    # ---------------------------------------------------------------------- #
+
     def detect(self, image: Image.Image) -> List[Dict[str, Any]]:
         """
-        Run detection on a single image.
-        
-        Args:
-            image: PIL Image
-        
-        Returns:
-            List of detections
-        """
-        # Preprocess
-        image_tensor, original_size = self.preprocess_image(image)
-        
-        # Add batch dimension
-        image_tensor = image_tensor.unsqueeze(0).to(self.device)
-        
-        # Inference
-        with torch.no_grad():
-            predictions = self.model(image_tensor)[0]
-        
-        # Postprocess
-        detections = self.postprocess_predictions(predictions, original_size)
-        
-        logger.debug(f"Detected {len(detections)} objects in image of size {original_size}")
-        
-        return detections
-    
-    def detect_batch(self, images: List[Image.Image]) -> List[List[Dict[str, Any]]]:
-        """
-        Run detection on multiple images.
-        
-        Args:
-            images: List of PIL Images
-        
-        Returns:
-            List of detection lists (one per image)
-        """
-        all_detections = []
-        
-        for image in images:
-            detections = self.detect(image)
-            all_detections.append(detections)
-        
-        return all_detections
-    
-    def detect_from_path(self, image_path: Path) -> List[Dict[str, Any]]:
-        """
-        Run detection on image from file path.
-        
-        Args:
-            image_path: Path to image file
-        
-        Returns:
-            List of detections
-        """
-        try:
-            image = Image.open(image_path)
-            return self.detect(image)
-        except Exception as e:
-            logger.error(f"Failed to process image {image_path}: {e}")
+        Run detection on a single PIL image.
 
+        Returns
+        -------
+        list of detection dicts.
+        """
+        if self.input_size != self._transforms.transforms[0].size[0]:
+            self._build_transforms()
+
+        tensor, original_size = self.preprocess_image(image)
+
+        with torch.no_grad():
+            outputs = self.model(tensor)
+
+        raw = outputs[0]
+        detections = self.postprocess_predictions(raw, original_size)
+
+        logger.debug(
+            f"Detected {len(detections)} objects in image {original_size}"
+        )
+        return detections
+
+    # ---------------------------------------------------------------------- #
+
+    def detect_batch(
+        self, images: List[Image.Image]
+    ) -> List[List[Dict[str, Any]]]:
+        """Run detection on a list of PIL images."""
+        return [self.detect(img) for img in images]
+
+    def detect_from_path(self, image_path: Path) -> List[Dict[str, Any]]:
+        """Run detection on an image file."""
+        try:
+            return self.detect(Image.open(image_path))
+        except Exception as exc:
+            logger.error(f"Failed to process {image_path}: {exc}")
             return []

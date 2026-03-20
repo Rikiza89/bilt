@@ -1,20 +1,50 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2024 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
+
+"""
+BILT training engine.
+
+Handles the full training loop:
+  - Warm-up with frozen backbone (epochs 0–4)
+  - Gradual backbone unfreeze (epoch 5+)
+  - AdamW optimiser + cosine LR annealing
+  - Gradient clipping
+  - Best-checkpoint saving (lowest validation loss)
+"""
+
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 import torch
-from pathlib import Path
-from typing import Dict, Any, Optional, Callable
-import time
 
-from .core import DetectionModel, get_optimizer, get_lr_scheduler
+from .core import DetectionModel, get_lr_scheduler, get_optimizer
 from .dataset import create_dataloader
 from .utils import get_logger
+from .variants import DEFAULT_VARIANT
 
 logger = get_logger(__name__)
 
 
 class Trainer:
-    """CPU-optimized training engine for object detection."""
-    
+    """
+    Training engine for BILT detectors.
+
+    Parameters
+    ----------
+    dataset_path  : Path   Root dataset directory (must contain train/ and val/).
+    num_classes   : int    Number of object categories.
+    class_names   : list   Human-readable names for the categories.
+    batch_size    : int    Images per batch (min 2).
+    learning_rate : float  Initial AdamW learning rate.
+    num_epochs    : int    Total training epochs.
+    num_workers   : int    DataLoader worker processes (0 = main process).
+    input_size    : int    Image resolution for training; None = variant default.
+    device        : torch.device
+    variant       : str    BILT model variant (spark / flash / core / pro / max).
+    """
+
     def __init__(
         self,
         dataset_path: Path,
@@ -24,8 +54,9 @@ class Trainer:
         learning_rate: float = 5e-4,
         num_epochs: int = 50,
         num_workers: int = 0,
-        input_size: int = 640,
-        device: torch.device = None
+        input_size: Optional[int] = None,
+        device: Optional[torch.device] = None,
+        variant: str = DEFAULT_VARIANT,
     ):
         self.dataset_path = Path(dataset_path)
         self.num_classes = num_classes
@@ -34,188 +65,220 @@ class Trainer:
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
         self.num_workers = num_workers
+        self.variant = variant
+        self.device = device or torch.device("cpu")
+
+        # Resolve input size from variant default if not provided
+        if input_size is None:
+            from .variants import get_variant_config
+            input_size = get_variant_config(variant)["input_size"]
         self.input_size = input_size
-        
-        self.device = device if device else torch.device('cpu')
-        
-        # Create dataloaders
-        logger.info("Creating training dataloader...")
+
+        # ------------------------------------------------------------------ #
+        # Data loaders                                                        #
+        # ------------------------------------------------------------------ #
+        logger.info("Building training dataloader …")
         self.train_loader, _ = create_dataloader(
             images_dir=self.dataset_path / "train" / "images",
             labels_dir=self.dataset_path / "train" / "labels",
             batch_size=batch_size,
             num_workers=num_workers,
             shuffle=True,
-            input_size=input_size,
-            training=True
+            input_size=self.input_size,
+            training=True,
         )
-        
-        logger.info("Creating validation dataloader...")
+
+        logger.info("Building validation dataloader …")
         self.val_loader, _ = create_dataloader(
             images_dir=self.dataset_path / "val" / "images",
             labels_dir=self.dataset_path / "val" / "labels",
             batch_size=batch_size,
             num_workers=num_workers,
             shuffle=False,
-            input_size=input_size,
-            training=True
+            input_size=self.input_size,
+            training=False,
         )
-        
-        # Create model
-        logger.info("Initializing model...")
-        self.detection_model = DetectionModel(num_classes=num_classes, pretrained=True)
-        self.model = self.detection_model.get_model()
-        self.model.to(self.device)
-        
-        # Setup optimizer and scheduler
-        self.optimizer = get_optimizer(self.model, learning_rate)
+
+        # ------------------------------------------------------------------ #
+        # Model                                                               #
+        # ------------------------------------------------------------------ #
+        logger.info(f"Initialising BILT-{variant} for {num_classes} classes …")
+        self.detection_model = DetectionModel(
+            variant=variant,
+            num_classes=num_classes,
+            class_names=class_names,
+            pretrained=True,
+        )
+        self.detection_model.to(self.device)
+
+        # ------------------------------------------------------------------ #
+        # Optimiser and LR scheduler                                         #
+        # ------------------------------------------------------------------ #
+        self.optimizer = get_optimizer(
+            self.detection_model.model, learning_rate
+        )
         self.scheduler = get_lr_scheduler(self.optimizer, num_epochs)
-        
+
         # Training state
         self.current_epoch = 0
-        self.training_losses = []
-        self.validation_losses = []
-        
-        logger.info("Trainer initialized successfully")
-    
+        self.training_losses: list = []
+        self.validation_losses: list = []
+
+        logger.info("Trainer ready.")
+
+    # ---------------------------------------------------------------------- #
+
     def train_one_epoch(self) -> float:
-        """Train for one epoch."""
-        self.model.train()
+        """Run one forward-backward pass over the training set."""
+        self.detection_model.train()
         epoch_loss = 0.0
         num_batches = 0
-        
+
         for batch_idx, (images, targets) in enumerate(self.train_loader):
             images = images.to(self.device)
-            targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-            
-            # Forward pass
-            loss_dict = self.model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
-            
-            # Backward pass
+            targets = [
+                {k: v.to(self.device) for k, v in t.items()} for t in targets
+            ]
+
+            loss_dict = self.detection_model(images, targets)
+            loss = loss_dict["total"]
+
             self.optimizer.zero_grad()
-            losses.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.detection_model.model.parameters(), max_norm=5.0
+            )
             self.optimizer.step()
-            
-            epoch_loss += losses.item()
+
+            epoch_loss += loss.item()
             num_batches += 1
-            
+
             if batch_idx % 10 == 0:
+                cls_l = loss_dict.get("cls", torch.tensor(0.0)).item()
+                box_l = loss_dict.get("box", torch.tensor(0.0)).item()
                 logger.info(
-                    f"Epoch {self.current_epoch + 1}/{self.num_epochs} - "
-                    f"Batch {batch_idx}/{len(self.train_loader)} - "
-                    f"Loss: {losses.item():.4f}"
+                    f"Epoch {self.current_epoch + 1}/{self.num_epochs}  "
+                    f"batch {batch_idx}/{len(self.train_loader)}  "
+                    f"loss={loss.item():.4f}  "
+                    f"cls={cls_l:.4f}  box={box_l:.4f}"
                 )
-        
-        avg_loss = epoch_loss / max(num_batches, 1)
-        return avg_loss
-    
+
+        return epoch_loss / max(num_batches, 1)
+
+    # ---------------------------------------------------------------------- #
+
     def validate(self) -> float:
-        """Validate the model."""
-        self.model.train()  # SSD requires train mode for loss calculation
+        """Compute validation loss without updating model parameters."""
+        self.detection_model.train()   # loss computation requires train mode
         epoch_loss = 0.0
         num_batches = 0
-        
+
         with torch.no_grad():
             for images, targets in self.val_loader:
                 images = images.to(self.device)
-                targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-                
-                loss_dict = self.model(images, targets)
-                losses = sum(loss for loss in loss_dict.values())
-                
-                epoch_loss += losses.item()
+                targets = [
+                    {k: v.to(self.device) for k, v in t.items()}
+                    for t in targets
+                ]
+                loss_dict = self.detection_model(images, targets)
+                epoch_loss += loss_dict["total"].item()
                 num_batches += 1
-        
-        avg_loss = epoch_loss / max(num_batches, 1)
-        return avg_loss
-    
+
+        return epoch_loss / max(num_batches, 1)
+
+    # ---------------------------------------------------------------------- #
+
     def train(
         self,
         save_path: Path,
-        callback: Optional[Callable] = None
+        callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
-        Run full training loop.
-        
-        Args:
-            save_path: Path to save the trained model
-            callback: Optional callback function for progress updates
-        
-        Returns:
-            Training metrics
+        Run the complete training loop.
+
+        Parameters
+        ----------
+        save_path : Path  Where to write the best checkpoint.
+        callback  : optional callable invoked at the end of each epoch with
+                    a metrics dict.
+
+        Returns
+        -------
+        dict with final training metrics.
         """
-        logger.info(f"Starting training for {self.num_epochs} epochs")
-        start_time = time.time()
-        
-        best_val_loss = float('inf')
-        
+        logger.info(
+            f"Training BILT-{self.variant}  "
+            f"epochs={self.num_epochs}  "
+            f"input={self.input_size}px  "
+            f"device={self.device}"
+        )
+        t0 = time.time()
+        best_val_loss = float("inf")
+
         for epoch in range(self.num_epochs):
             self.current_epoch = epoch
-            
-            # Freeze backbone for warmup
+
+            # Backbone warmup: freeze for first 5 epochs
             if epoch == 0:
-                logger.info("Freezing backbone for warmup")
-                for param in self.model.backbone.parameters():
-                    param.requires_grad = False
+                logger.info("Warming up: backbone frozen for first 5 epochs.")
+                self.detection_model.model.backbone.freeze()
             if epoch == 5:
-                logger.info("Unfreezing backbone")
-                for param in self.model.backbone.parameters():
-                    param.requires_grad = True
-            
-            # Train
+                logger.info("Unfreezing backbone.")
+                self.detection_model.model.backbone.unfreeze()
+                # Reinitialise optimiser so unfrozen params are included
+                self.optimizer = get_optimizer(
+                    self.detection_model.model, self.learning_rate
+                )
+
             train_loss = self.train_one_epoch()
             self.training_losses.append(train_loss)
-            
-            # Validate
+
             val_loss = self.validate()
             self.validation_losses.append(val_loss)
-            
-            # Update learning rate
+
             self.scheduler.step()
-            current_lr = self.optimizer.param_groups[0]['lr']
-            
+            current_lr = self.optimizer.param_groups[0]["lr"]
+
             logger.info(
-                f"Epoch {epoch + 1}/{self.num_epochs} - "
-                f"Train Loss: {train_loss:.4f} - "
-                f"Val Loss: {val_loss:.4f} - "
-                f"LR: {current_lr:.6f}"
+                f"Epoch {epoch + 1}/{self.num_epochs}  "
+                f"train_loss={train_loss:.4f}  "
+                f"val_loss={val_loss:.4f}  "
+                f"lr={current_lr:.2e}"
             )
-            
-            # Callback
+
             if callback:
                 callback({
-                    'epoch': epoch + 1,
-                    'total_epochs': self.num_epochs,
-                    'train_loss': train_loss,
-                    'val_loss': val_loss,
-                    'lr': current_lr
+                    "epoch":        epoch + 1,
+                    "total_epochs": self.num_epochs,
+                    "train_loss":   train_loss,
+                    "val_loss":     val_loss,
+                    "lr":           current_lr,
                 })
-            
-            # Save best model
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                
-                # Get class mappings
                 class_id_mapping = {
-                    'class_id_to_idx': getattr(self.train_loader.dataset, 'class_id_to_idx', None),
-                    'idx_to_class_id': getattr(self.train_loader.dataset, 'idx_to_class_id', None)
+                    "class_id_to_idx": getattr(
+                        self.train_loader.dataset, "class_id_to_idx", None
+                    ),
+                    "idx_to_class_id": getattr(
+                        self.train_loader.dataset, "idx_to_class_id", None
+                    ),
                 }
-                
-                self.detection_model.save(save_path, self.class_names, class_id_mapping)
-                logger.info(f"Saved best model with val_loss: {val_loss:.4f}")
-        
-        training_time = time.time() - start_time
-        
-        logger.info(f"Training completed in {training_time:.2f} seconds")
-        
-        return {
-            'num_epochs': self.num_epochs,
-            'final_train_loss': self.training_losses[-1],
-            'final_val_loss': self.validation_losses[-1],
-            'best_val_loss': best_val_loss,
-            'training_time': training_time,
-            'model_path': str(save_path)
+                self.detection_model.save(
+                    save_path, self.class_names, class_id_mapping
+                )
+                logger.info(f"  ↳ New best model saved (val_loss={val_loss:.4f})")
 
+        elapsed = time.time() - t0
+        logger.info(f"Training finished in {elapsed:.1f}s")
+
+        return {
+            "variant":           self.variant,
+            "num_epochs":        self.num_epochs,
+            "final_train_loss":  self.training_losses[-1],
+            "final_val_loss":    self.validation_losses[-1],
+            "best_val_loss":     best_val_loss,
+            "training_time":     elapsed,
+            "model_path":        str(save_path),
         }

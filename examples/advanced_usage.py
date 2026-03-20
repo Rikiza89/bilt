@@ -1,124 +1,107 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2024 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 """
-Advanced usage examples for BILT library.
+Advanced BILT usage examples.
 """
 
-from ..bilt import BILT
 from pathlib import Path
+from bilt import BILT
 
-# Example 1: Training with callback
-print("="*60)
+# ── 1. Training with a progress callback ────────────────────────────────────
+print("=" * 60)
 print("Example 1: Training with custom callback")
-print("="*60)
+print("=" * 60)
+
 
 def training_callback(info):
-    """Custom callback for training progress."""
-    epoch = info['epoch']
-    total = info['total_epochs']
-    train_loss = info['train_loss']
-    val_loss = info['val_loss']
-    lr = info['lr']
-    
-    progress = (epoch / total) * 100
-    print(f"[{progress:5.1f}%] Epoch {epoch}/{total} | "
-          f"Train: {train_loss:.4f} | Val: {val_loss:.4f} | LR: {lr:.6f}")
+    pct = info["epoch"] / info["total_epochs"] * 100
+    print(
+        f"[{pct:5.1f}%] Epoch {info['epoch']}/{info['total_epochs']} | "
+        f"train={info['train_loss']:.4f}  val={info['val_loss']:.4f}  "
+        f"lr={info['lr']:.2e}"
+    )
 
-model = BILT()
+
+model = BILT("pro")        # ResNet-50, 640 px
 metrics = model.train(
     dataset="datasets/my_dataset",
     epochs=100,
     batch_size=8,
-    img_size=640,
-    learning_rate=0.001,
+    learning_rate=5e-4,
     save_dir="runs/train",
-    name="custom_experiment"
+    name="pro_experiment",
 )
 
-# Example 2: Inference with custom thresholds
-print("\n" + "="*60)
+# ── 2. Inference with different thresholds ───────────────────────────────────
+print("\n" + "=" * 60)
 print("Example 2: Custom inference parameters")
-print("="*60)
+print("=" * 60)
 
 model = BILT("weights/best.pth")
 
-# Low confidence for finding more objects
-results_low = model.predict("image.jpg", conf=0.1, iou=0.3)
-print(f"Low confidence: {len(results_low)} detections")
+# More detections (lower threshold)
+r_low  = model.predict("image.jpg", conf=0.1, iou=0.3)
+# Fewer, higher-quality detections
+r_high = model.predict("image.jpg", conf=0.8, iou=0.5)
 
-# High confidence for precision
-results_high = model.predict("image.jpg", conf=0.8, iou=0.5)
-print(f"High confidence: {len(results_high)} detections")
+print(f"conf=0.1: {len(r_low)}  detections")
+print(f"conf=0.8: {len(r_high)} detections")
 
-# Different image sizes
-results_small = model.predict("image.jpg", img_size=320)
-results_large = model.predict("image.jpg", img_size=1280)
+# ── 3. Save and reload ───────────────────────────────────────────────────────
+print("\n" + "=" * 60)
+print("Example 3: Save and reload a model")
+print("=" * 60)
 
-# Example 3: Save and load models
-print("\n" + "="*60)
-print("Example 3: Save and load models")
-print("="*60)
-
-# Train model
-model = BILT()
+model = BILT("flash")      # MobileNetV3-Small, 416 px
 model.train(dataset="datasets/my_dataset", epochs=10)
+model.save("models/my_flash_model.pth")
 
-# Save to custom location
-model.save("models/my_custom_model.pth")
+restored = BILT("models/my_flash_model.pth")
+print(restored)            # BILT(variant=flash, classes=N, device=cpu)
 
-# Load from saved location
-loaded_model = BILT("models/my_custom_model.pth")
-results = loaded_model.predict("test.jpg")
-
-# Example 4: Processing entire dataset
-print("\n" + "="*60)
-print("Example 4: Process entire dataset")
-print("="*60)
+# ── 4. Process an entire directory ──────────────────────────────────────────
+print("\n" + "=" * 60)
+print("Example 4: Process a directory of images")
+print("=" * 60)
 
 model = BILT("weights/best.pth")
-dataset_path = Path("datasets/test_images")
+dataset_dir = Path("datasets/test_images")
 
-all_results = []
-for img_path in dataset_path.glob("*.jpg"):
-    results = model.predict(str(img_path), conf=0.3)
-    all_results.append({
-        'image': img_path.name,
-        'detections': results,
-        'count': len(results)
-    })
-    print(f"{img_path.name}: {len(results)} objects")
+summary = []
+for img_path in sorted(dataset_dir.glob("*.jpg")):
+    dets = model.predict(str(img_path), conf=0.3)
+    summary.append({"image": img_path.name, "count": len(dets)})
+    print(f"  {img_path.name}: {len(dets)} objects")
 
-# Summary
-total_detections = sum(r['count'] for r in all_results)
-print(f"\nTotal: {len(all_results)} images, {total_detections} detections")
+total = sum(r["count"] for r in summary)
+print(f"\nTotal: {len(summary)} images, {total} detections")
 
-# Example 5: GPU/CPU selection
-print("\n" + "="*60)
+# ── 5. Device selection ──────────────────────────────────────────────────────
+print("\n" + "=" * 60)
 print("Example 5: Device selection")
-print("="*60)
+print("=" * 60)
 
-# Use CPU explicitly
-model_cpu = BILT("weights/best.pth", device="cpu")
+model_cpu  = BILT("weights/best.pth", device="cpu")
+model_auto = BILT("weights/best.pth")          # auto-detect
+print(f"CPU model  : {model_cpu.device}")
+print(f"Auto model : {model_auto.device}")
 
-# Use GPU if available
 try:
     model_gpu = BILT("weights/best.pth", device="cuda")
-    print("Using GPU")
-except:
-    print("GPU not available, using CPU")
+    print(f"GPU model  : {model_gpu.device}")
+except Exception:
+    print("CUDA not available.")
 
-# Auto-detect (default)
-model_auto = BILT("weights/best.pth")
-print(f"Auto-detected device: {model_auto.device}")
-
-# Example 6: Access model properties
-print("\n" + "="*60)
+# ── 6. Inspect model properties ─────────────────────────────────────────────
+print("\n" + "=" * 60)
 print("Example 6: Model properties")
-print("="*60)
+print("=" * 60)
 
 model = BILT("weights/best.pth")
-print(f"Model: {model}")
-print(f"Classes: {model.names}")
-print(f"Number of classes: {model.num_classes}")
-
-print(f"Device: {model.device}")
+print(model)                                   # repr
+print(f"  variant    : {model.variant}")
+print(f"  num_classes: {model.num_classes}")
+print(f"  class names: {model.names}")
+print(f"  device     : {model.device}")

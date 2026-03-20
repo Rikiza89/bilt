@@ -1,4 +1,6 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2024 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 import torch
 from pathlib import Path

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bilt"
-version = "0.1.0"
+version = "0.2.0"
 description = "BILT (Because I Like Twice) - A PyTorch-based object detection library"
 readme = "README.md"
 requires-python = ">=3.8"

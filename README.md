@@ -1,466 +1,264 @@
-# BILT - Because I Like Twice
+# BILT — Because I Like Twice
 
-<div align="center">
+**BILT** is a lightweight, CPU-friendly object detection library built entirely on PyTorch.
+It provides a clean, high-level API inspired by modern detection frameworks while remaining
+fully independent — using an original FPN-based detection architecture rather than any
+third-party detection model.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-1.10+-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-**A lightweight, CPU-optimized object detection library built on PyTorch**
-
-[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Examples](#examples)
-
-</div>
+> **License:** GNU Affero General Public License v3.0
+> **Copyright:** © 2024 Rikiza89
 
 ---
 
-## 🎯 What is BILT?
+## Features
 
-BILT (Because I Like Twice) is a pure Python object detection library designed for ease of use and CPU efficiency. Built on PyTorch and torchvision, it provides a clean, YOLO-like API for training and inference without the complexity.
-
-### Why BILT?
-
-- **🚀 Simple API** - Train and detect with just a few lines of code
-- **💻 CPU-Optimized** - Works efficiently on systems without GPU
-- **🔧 Pure PyTorch** - No external dependencies on heavy frameworks
-- **📦 Lightweight** - Minimal footprint, easy to deploy
-- **🎓 Educational** - Clean, readable codebase perfect for learning
-- **🔌 Framework-Free** - No YOLO, no Ultralytics, just PyTorch
+- **Five model sizes** — *spark / flash / core / pro / max* — each with a different backbone so you can choose the right speed/accuracy trade-off
+- **Original architecture** — custom FPN neck + anchor-based detection head + focal loss; no dependency on proprietary detection code
+- **Pretrained backbones** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (MIT/BSD-licensed, via torchvision)
+- **Simple API** — `BILT("core")`, `.train()`, `.predict()`, `.evaluate()`, `.save()`, `.load()`
+- **CPU-first** — works on laptops, Raspberry Pi, and any edge device
+- **CUDA supported** — automatic GPU detection when available
 
 ---
 
-## ✨ Features
+## Model Variants
 
-- **SSD MobileNetV3** architecture for fast, efficient detection
-- **Multiple input formats** - paths, PIL Images, numpy arrays, directories
-- **Batch processing** - Process single images or entire datasets
-- **YOLO format datasets** - Compatible with standard YOLO dataset structure
-- **Platform detection** - Automatic optimization for Raspberry Pi, ARM, Windows, Linux
-- **Training callbacks** - Monitor and control training progress
-- **Model evaluation** - Built-in metrics and validation
-- **Easy export** - Save and load models with metadata
+| Variant | Backbone | Input | FPN ch | Best for |
+|---------|----------|-------|--------|----------|
+| `spark` | MobileNetV2 | 320 px | 64 | Embedded / real-time |
+| `flash` | MobileNetV3-Small | 416 px | 96 | Edge / fast inference |
+| `core` | MobileNetV3-Large | 512 px | 128 | General use (default) |
+| `pro` | ResNet-50 | 640 px | 256 | High accuracy |
+| `max` | ResNet-101 | 640 px | 256 | Maximum accuracy |
 
----
+Short aliases are supported: `n / s / m / l / x` and `nano / small / medium / large / xlarge`.
 
-## 📦 Installation
-
-### From PyPI (coming soon)
-
-```bash
-pip install bilt
+```python
+from bilt import BILT, list_variants
+list_variants()   # prints the table above
 ```
 
-### From source
+---
+
+## Installation
 
 ```bash
-git clone https://github.com/Rikiza89/bilt.git
-cd bilt
-pip install -e .
+pip install torch torchvision pillow numpy pyyaml
+pip install -e .          # development install from source
 ```
 
 ### Requirements
 
-```bash
-pip install torch torchvision Pillow numpy pyyaml
-```
-
-**Minimum versions:**
 - Python 3.8+
-- PyTorch 1.10+
-- torchvision 0.11+
+- torch ≥ 1.10
+- torchvision ≥ 0.11
+- Pillow ≥ 8.0
+- numpy ≥ 1.19
+- pyyaml ≥ 5.4
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Load and Predict
+### Inference on a saved model
 
 ```python
 from bilt import BILT
 
-# Load pretrained model
-model = BILT("weights/my_model.pth")
+model = BILT("weights/best.pth")
+detections = model.predict("image.jpg", conf=0.25)
 
-# Predict on single image
-results = model.predict("image.jpg", conf=0.25)
-
-# Print detections
-for det in results:
-    print(f"{det['class_name']}: {det['score']:.2f} at {det['bbox']}")
+for det in detections:
+    print(f"{det['class_name']}: {det['score']:.2f}  bbox={det['bbox']}")
 ```
 
-### Train a Model
+### Training from scratch
 
 ```python
 from bilt import BILT
 
-# Create new model
-model = BILT()
+model = BILT("core")          # MobileNetV3-Large, 512 px
 
-# Train on your dataset
-model.train(
+metrics = model.train(
     dataset="datasets/my_dataset",
     epochs=100,
     batch_size=8,
-    img_size=640
+    learning_rate=5e-4,
 )
-
-# Model is automatically saved to runs/train/exp/weights/best.pth
+print(metrics)
 ```
 
-### Batch Processing
+### Choosing a different size
 
 ```python
-# Process entire directory
+model = BILT("spark")   # nano — fastest
+model = BILT("flash")   # small
+model = BILT("core")    # medium (default)
+model = BILT("pro")     # large
+model = BILT("max")     # xlarge — most accurate
+
+# Short aliases also work
+model = BILT("n")       # same as spark
+model = BILT("m")       # same as core
+model = BILT("x")       # same as max
+```
+
+### Batch prediction with annotated images
+
+```python
 results = model.predict("images/", conf=0.3, return_images=True)
-
-# Save annotated images
-results.save("runs/detect/exp")
-```
-
----
-
-## 📚 Documentation
-
-### Model Initialization
-
-```python
-# Train from scratch
-model = BILT()
-
-# Load pretrained model
-model = BILT("weights/model.pth")
-
-# Specify device
-model = BILT("weights/model.pth", device="cuda")  # or "cpu"
-```
-
-### Prediction
-
-```python
-model.predict(
-    source,              # str, Path, Image, ndarray, or list
-    conf=0.25,          # Confidence threshold (0.0-1.0)
-    iou=0.45,           # NMS IoU threshold (0.0-1.0)
-    img_size=640,       # Input image size
-    return_images=False # Return Results object with images
-)
-```
-
-**Supported input types:**
-- File path: `"image.jpg"`
-- Directory: `"images/"` (processes all images)
-- PIL Image: `Image.open("image.jpg")`
-- Numpy array: `np.array(...)`
-- List: `["img1.jpg", "img2.jpg", ...]`
-
-### Training
-
-```python
-model.train(
-    dataset="datasets/my_data",  # Path to dataset root
-    epochs=100,                  # Number of epochs
-    batch_size=8,                # Batch size (min 2)
-    img_size=640,                # Input image size
-    learning_rate=0.001,         # Learning rate
-    device="cpu",                # Device ("cpu" or "cuda")
-    save_dir="runs/train",       # Save directory
-    name="exp",                  # Experiment name
-    workers=0                    # DataLoader workers (0 for Windows)
-)
+results.save("runs/detect/exp")   # saves annotated images
+results.show()                    # displays with matplotlib
 ```
 
 ### Evaluation
 
 ```python
-metrics = model.evaluate(
-    dataset="datasets/val",  # Validation dataset path
-    batch_size=4,
-    conf=0.25
-)
-
-print(f"Total images: {metrics['total_images']}")
-print(f"Detections: {metrics['total_predictions']}")
-```
-
-### Save & Load
-
-```python
-# Save model
-model.save("models/my_model.pth")
-
-# Load model
-loaded_model = BILT("models/my_model.pth")
+metrics = model.evaluate("datasets/my_dataset")
+print(f"Avg detections/image: {metrics['avg_predictions_per_image']:.2f}")
 ```
 
 ---
 
-## 📁 Dataset Format
+## Dataset Format
 
-BILT uses YOLO format datasets:
+BILT uses the standard normalised label format compatible with most annotation
+tools (LabelImg, Roboflow, CVAT, etc.):
+
+```
+<class_id>  <x_center>  <y_center>  <width>  <height>
+```
+
+All five values are normalised to `[0, 1]` relative to the image size.
+
+### Expected directory layout
 
 ```
 dataset/
 ├── train/
-│   ├── images/
-│   │   ├── img1.jpg
-│   │   ├── img2.jpg
-│   │   └── ...
-│   └── labels/
-│       ├── img1.txt
-│       ├── img2.txt
-│       └── ...
+│   ├── images/   *.jpg / *.png / …
+│   └── labels/   *.txt
 ├── val/
 │   ├── images/
 │   └── labels/
-└── data.yaml
+└── data.yaml     (optional but recommended)
 ```
 
-**Label format** (YOLO): `class_id x_center y_center width height` (normalized 0-1)
+### data.yaml
 
-**data.yaml:**
 ```yaml
-train: /path/to/dataset/train/images
-val: /path/to/dataset/val/images
 nc: 3
-names: ['class1', 'class2', 'class3']
+names: [cat, dog, person]
 ```
 
 ---
 
-## 💡 Examples
+## Architecture
 
-### Example 1: Simple Detection
-
-```python
-from bilt import BILT
-
-model = BILT("weights/coco.pth")
-results = model.predict("street.jpg", conf=0.5)
-
-for det in results:
-    print(f"Found {det['class_name']} with {det['score']:.2%} confidence")
+```
+Input image (H×W)
+      │
+  ┌───▼────────────────────────┐
+  │  BILTBackbone              │  pretrained (MobileNet / ResNet)
+  │  C3 (1/8)  C4 (1/16)  C5 (1/32)
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐
+  │  FPNNeck  (original)       │
+  │  P3    P4    P5    P6      │  all with fpn_channels
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐
+  │  BILTHead  (original)      │  shared across all FPN levels
+  │  cls_preds  +  box_preds   │
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐    ┌──────────────────────────────┐
+  │  Training                  │    │  Inference                   │
+  │  Anchor matching           │    │  Box decode + per-class NMS  │
+  │  Focal loss + Smooth-L1    │    │  Score filter                │
+  └────────────────────────────┘    └──────────────────────────────┘
 ```
 
-### Example 2: Training with Callback
+**Training losses**
 
-```python
-from bilt import BILT
-
-def training_callback(info):
-    epoch = info['epoch']
-    train_loss = info['train_loss']
-    val_loss = info['val_loss']
-    print(f"Epoch {epoch}: Train={train_loss:.4f}, Val={val_loss:.4f}")
-
-model = BILT()
-model.train(
-    dataset="datasets/custom",
-    epochs=50,
-    batch_size=4
-)
-```
-
-### Example 3: Batch Processing
-
-```python
-from bilt import BILT
-from pathlib import Path
-
-model = BILT("weights/model.pth")
-
-# Process all images in folder
-image_folder = Path("test_images")
-all_results = []
-
-for img_path in image_folder.glob("*.jpg"):
-    results = model.predict(str(img_path), conf=0.3)
-    all_results.append({
-        'image': img_path.name,
-        'detections': len(results),
-        'objects': [r['class_name'] for r in results]
-    })
-
-# Summary
-total_detections = sum(r['detections'] for r in all_results)
-print(f"Processed {len(all_results)} images")
-print(f"Found {total_detections} total objects")
-```
-
-### Example 4: Custom Training Loop
-
-```python
-from bilt import BILT
-
-# Train on different datasets sequentially
-model = BILT()
-
-datasets = ["datasets/cars", "datasets/pedestrians", "datasets/signs"]
-
-for dataset in datasets:
-    print(f"Training on {dataset}...")
-    model.train(
-        dataset=dataset,
-        epochs=30,
-        batch_size=8,
-        save_dir=f"runs/{Path(dataset).name}"
-    )
-```
+| Loss | Purpose |
+|------|---------|
+| Focal loss (α=0.25, γ=2.0) | Classification — handles class imbalance |
+| Smooth-L1 | Bounding-box regression |
 
 ---
 
-## 🖥️ Platform-Specific Optimizations
+## API Reference
 
-BILT automatically detects your platform and optimizes settings:
+### `BILT(weights=None, device=None)`
 
-| Platform | Batch Size | Epochs | Image Size | Workers |
-|----------|------------|--------|------------|---------|
-| **Raspberry Pi** | 2 | 30 | 320 | 0 |
-| **ARM (other)** | 2 | 100 | 480 | 0 |
-| **Windows** | 4 | 100 | 640 | 0 |
-| **Linux/Mac** | 4 | 100 | 640 | 2 |
+| Argument | Description |
+|----------|-------------|
+| `weights` | Variant name (`"spark"` … `"max"`), a `.pth` checkpoint path, or `None` |
+| `device`  | `"cpu"`, `"cuda"`, or `None` (auto) |
 
-Override defaults:
-```python
-model.train(
-    dataset="my_data",
-    batch_size=16,  # Override platform default
-    workers=4       # Override platform default
-)
-```
+### `.predict(source, conf, iou, img_size, return_images)`
 
----
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `source` | — | File path, directory, PIL Image, numpy array, or list |
+| `conf` | `0.25` | Minimum confidence score |
+| `iou` | `0.45` | NMS IoU threshold |
+| `img_size` | variant default | Override inference resolution |
+| `return_images` | `False` | Return `Results` with annotated images |
 
-## 🎯 Use Cases
+### `.train(dataset, epochs, batch_size, img_size, learning_rate, ...)`
 
-- **Edge Deployment** - Run detection on Raspberry Pi, Jetson Nano, or CPU-only servers
-- **Prototyping** - Quick experimentation without GPU requirements
-- **Learning** - Educational tool for understanding object detection
-- **Embedded Systems** - Lightweight detection for IoT devices
-- **Custom Applications** - Easy integration into Python applications
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `dataset` | — | Path to dataset root |
+| `epochs` | `50` | Training epochs |
+| `batch_size` | `4` | Images per batch |
+| `img_size` | variant default | Training resolution |
+| `learning_rate` | `5e-4` | AdamW learning rate |
+| `variant` | `"core"` | Override model variant for this run |
+| `save_dir` | `"runs/train"` | Output directory |
+| `name` | `"exp"` | Run sub-directory name |
 
----
+### `.evaluate(dataset, batch_size, conf)`
 
-## 🔧 Architecture
+Returns a dict with `total_images`, `total_predictions`, `total_ground_truth`,
+`avg_predictions_per_image`, `avg_ground_truth_per_image`.
 
-BILT uses **SSD (Single Shot MultiBox Detector)** with **MobileNetV3** backbone:
+### `.save(path)` / `.load(weights)`
 
-- **Lightweight** - Optimized for mobile and edge devices
-- **Fast** - Real-time inference on CPU
-- **Accurate** - Competitive mAP on standard benchmarks
-- **Proven** - Battle-tested architecture from PyTorch/torchvision
+Checkpoints include the variant name, class names, input size and full model
+state so a single file is sufficient to restore a complete model.
 
----
+### `BILT.variants()`
 
-## 📊 Performance
-
-Benchmarks on CPU (Intel i5-8250U):
-
-| Image Size | Batch Size | FPS | mAP@0.5 |
-|------------|------------|-----|---------|
-| 320x320 | 1 | ~15 | 0.45 |
-| 640x640 | 1 | ~8 | 0.52 |
-| 640x640 | 4 | ~6 | 0.52 |
-
-*Results on COCO val2017 subset*
+Prints a summary of all five variants (static method, callable on the class).
 
 ---
 
-## 🛠️ Advanced Features
+## Legal
 
-### Custom Image Preprocessing
+BILT is an original work by **Rikiza89**, released under the
+**GNU Affero General Public License v3.0**.
 
-```python
-from PIL import Image
-import numpy as np
+- The detection architecture (FPN neck, detection head, anchor matching,
+  focal loss, smooth-L1) is written from scratch and is not derived from any
+  other project.
+- Pretrained backbone weights are loaded from **torchvision** (BSD/MIT licensed).
+- No code from Ultralytics, YOLO, or any other AGPL-encumbered project is
+  incorporated.
 
-# Load and preprocess
-img = Image.open("image.jpg")
-img_array = np.array(img)
-
-# Your preprocessing here
-img_array = custom_preprocessing(img_array)
-
-# Predict
-results = model.predict(img_array)
-```
-
-### Access Model Properties
-
-```python
-print(f"Model: {model}")
-print(f"Classes: {model.names}")
-print(f"Num classes: {model.num_classes}")
-print(f"Device: {model.device}")
-```
-
-### Results Object
-
-```python
-results = model.predict("image.jpg", return_images=True)
-
-# Save annotated images
-results.save("output/")
-
-# Display (requires matplotlib)
-results.show()
-
-# Access detections
-for i, dets in enumerate(results):
-    print(f"Image {i}: {len(dets)} detections")
-```
+See [LICENSE](LICENSE) for the full license text.
 
 ---
 
-## 🤝 Contributing
+## Roadmap
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📝 License
-
-This project is licensed under the GNU Affero General Public License v3.0 License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- Built on [PyTorch](https://pytorch.org/) and [torchvision](https://pytorch.org/vision/)
-- Inspired by [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-- SSD architecture from [torchvision.models.detection](https://pytorch.org/vision/stable/models.html#object-detection)
-
----
-
-## 📬 Contact
-
-- GitHub Issues: [Report bugs or request features](https://github.com/Rikiza89/bilt/issues)
-
----
-
-## 🗺️ Roadmap
-
-- [ ] GPU optimization and mixed precision training
-- [ ] Model export to ONNX and TensorRT
-- [ ] Additional architectures (Faster R-CNN, RetinaNet)
-- [ ] Data augmentation pipeline
-- [ ] Multi-GPU training support
-- [ ] Quantization for edge deployment
-- [ ] Web demo and Gradio interface
-- [ ] Pre-trained models on common datasets
-
----
-
-<div align="center">
-
-**Made with ❤️ by the BILT Team**
-
-[⭐ Star us on GitHub](https://github.com/Rikiza89/bilt) | [📖 Documentation](https://bilt.readthedocs.io) | [💬 Discussions](https://github.com/Rikiza89/bilt/discussions)
-
-</div>
+- [ ] mAP evaluation (COCO-style)
+- [ ] Data augmentation pipeline (mosaic, flips, colour jitter)
+- [ ] ONNX and TensorRT export
+- [ ] Mixed-precision (fp16) training
+- [ ] Multi-GPU training
+- [ ] Pre-trained BILT checkpoints (spark / flash / core trained on COCO)
+- [ ] Web demo (Gradio)
