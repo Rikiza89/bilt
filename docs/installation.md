@@ -62,14 +62,35 @@ Install PyTorch with CUDA support from [pytorch.org](https://pytorch.org/get-sta
 Choose the version that matches your CUDA toolkit (11.8 or 12.x recommended).
 
 ```bash
-# Example: CUDA 11.8
+# CUDA 11.8
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Then use `device="cuda"` when creating a BILT model:
+BILT checks `torch.cuda.is_available()` automatically. Once a CUDA-enabled PyTorch
+is installed, BILT uses the GPU for **both training and inference without any extra
+configuration**:
 
 ```python
-model = BILT("core", device="cuda")
+model = BILT("core")          # GPU used automatically
+model.train(dataset="data/")  # same — no device= needed
+```
+
+Verify that CUDA is visible before running:
+
+```python
+import torch
+print(torch.cuda.is_available())    # True
+print(torch.cuda.get_device_name(0))
+```
+
+To override and force a specific device, pass `device=` explicitly:
+
+```python
+model = BILT("core", device="cuda:1")   # second GPU
+model = BILT("core", device="cpu")      # force CPU
 ```
 
 ### Apple Silicon (MPS)

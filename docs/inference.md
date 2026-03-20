@@ -17,12 +17,13 @@ Everything is restored automatically — no need to pass extra arguments.
 
 ```python
 print(model)
-# BILT(variant=core, classes=3, device=cpu)
+# On a GPU machine:   BILT(variant=core, classes=3, device=cuda)
+# On a CPU machine:   BILT(variant=core, classes=3, device=cpu)
 
 print(model.variant)         # core
 print(model.num_classes)     # 3
 print(model.names)           # ['cat', 'dog', 'person']
-print(model.device)          # cpu
+print(model.device)          # cuda  or  cpu  (auto-detected)
 ```
 
 ---
@@ -226,13 +227,23 @@ results = inf.detect_batch(images)
 
 ## GPU inference
 
+`Inferencer` checks `torch.cuda.is_available()` automatically, so loading a
+model on a GPU machine requires no extra arguments:
+
 ```python
-model = BILT("weights/best.pth", device="cuda")
+# GPU is used automatically when CUDA is available
+model = BILT("weights/best.pth")
 detections = model.predict("photo.jpg")
+print(model.device)   # cuda
 ```
 
-No other changes needed. The `Inferencer` moves tensors to the correct device
-automatically.
+To pin to a specific device:
+
+```python
+model = BILT("weights/best.pth", device="cuda:1")   # second GPU
+model = BILT("weights/best.pth", device="cpu")       # force CPU
+model = BILT("weights/best.pth", device="mps")       # Apple Silicon
+```
 
 ---
 

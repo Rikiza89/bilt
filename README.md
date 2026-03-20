@@ -1,9 +1,12 @@
 # BILT — Because I Like Twice
 
-**BILT** is a lightweight, CPU-friendly object detection library built entirely on PyTorch.
+**BILT** is a lightweight object detection library built entirely on PyTorch.
 It provides a clean, high-level API inspired by modern detection frameworks while remaining
 fully independent — using an original FPN-based detection architecture rather than any
 third-party detection model.
+
+BILT automatically uses a CUDA GPU when one is available. No configuration needed — just
+install a CUDA-enabled PyTorch build and BILT picks it up for both training and inference.
 
 > **License:** GNU Affero General Public License v3.0
 > **Copyright:** © 2024 Rikiza89
@@ -16,8 +19,10 @@ third-party detection model.
 - **Original architecture** — custom FPN neck + anchor-based detection head + focal loss; no dependency on proprietary detection code
 - **Pretrained backbones** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (MIT/BSD-licensed, via torchvision)
 - **Simple API** — `BILT("core")`, `.train()`, `.predict()`, `.evaluate()`, `.save()`, `.load()`
-- **CPU-first** — works on laptops, Raspberry Pi, and any edge device
-- **CUDA supported** — automatic GPU detection when available
+- **GPU-first** — automatically uses CUDA when available; falls back to CPU seamlessly
+- **Pin-memory & non-blocking transfers** — DataLoader pins memory and tensor moves
+  use `non_blocking=True` on CUDA, overlapping CPU→GPU transfer with the forward pass
+- **Edge-friendly** — works on laptops, Raspberry Pi, and any CPU-only device
 
 ---
 
@@ -74,6 +79,8 @@ for det in detections:
 
 ### Training from scratch
 
+BILT auto-detects CUDA — no `device=` argument needed on a GPU machine.
+
 ```python
 from bilt import BILT
 
@@ -82,7 +89,7 @@ model = BILT("core")          # MobileNetV3-Large, 512 px
 metrics = model.train(
     dataset="datasets/my_dataset",
     epochs=100,
-    batch_size=8,
+    batch_size=8,             # increase to 16–32 on a GPU
     learning_rate=5e-4,
 )
 print(metrics)
@@ -116,6 +123,70 @@ results.show()                    # displays with matplotlib
 ```python
 metrics = model.evaluate("datasets/my_dataset")
 print(f"Avg detections/image: {metrics['avg_predictions_per_image']:.2f}")
+```
+
+---
+
+## GPU Acceleration
+
+### Automatic device selection
+
+BILT checks `torch.cuda.is_available()` at startup in `Trainer`, `Inferencer`,
+and `Evaluator`. If a CUDA GPU is present it is used automatically — you do not
+need to pass `device="cuda"` anywhere.
+
+```python
+model = BILT("core")
+model.train(dataset="data/", epochs=100)   # uses GPU if available
+```
+
+To verify which device is active:
+
+```python
+model = BILT("weights/best.pth")
+print(model.device)    # cuda  or  cpu
+```
+
+### Forcing a specific device
+
+```python
+# Force CPU even on a GPU machine
+model = BILT("core", device="cpu")
+model.train(dataset="data/", device="cpu")
+
+# Force a specific GPU
+model = BILT("core", device="cuda:1")
+
+# Apple Silicon
+model = BILT("core", device="mps")
+```
+
+### What's optimised on CUDA
+
+| Optimisation | Benefit |
+|---|---|
+| `pin_memory=True` on DataLoader | Faster CPU→GPU page-locked memory copy |
+| `non_blocking=True` on `.to(device)` | GPU forward pass overlaps with next batch transfer |
+| `persistent_workers=True` when `workers > 0` | Worker processes stay alive between epochs |
+
+### CUDA install
+
+Install the CUDA-enabled PyTorch wheel that matches your driver:
+
+```bash
+# CUDA 11.8
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+Verify CUDA is visible to PyTorch before running BILT:
+
+```python
+import torch
+print(torch.cuda.is_available())   # True
+print(torch.cuda.get_device_name(0))
 ```
 
 ---

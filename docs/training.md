@@ -19,6 +19,8 @@ BILT automatically:
 - Loads train and validation splits from `dataset/train/` and `dataset/val/`.
 - Reads class names from `data.yaml` if present.
 - Initialises the detector with pretrained backbone weights.
+- **Selects the best available device** — CUDA GPU if present, otherwise CPU.
+- Enables `pin_memory` and `non_blocking` transfers when on CUDA.
 - Freezes the backbone for the first 5 epochs (warmup), then unfreezes it.
 - Saves the best checkpoint (lowest validation loss) to `runs/train/exp/weights/best.pth`.
 
@@ -108,23 +110,43 @@ Image size must be divisible by 32. Common choices: 320, 416, 512, 640.
 
 ## Device selection
 
+BILT checks `torch.cuda.is_available()` inside `Trainer` and uses the GPU
+automatically. You only need to pass `device=` when you want to override this.
+
 ```python
-# Auto-detect (default)
+# Auto-detect — uses CUDA if available, otherwise CPU (recommended)
 model = BILT("core")
 model.train(dataset="data/")
 
-# Explicit GPU
-model.train(dataset="data/", device="cuda")
+# Force a specific GPU
+model.train(dataset="data/", device="cuda:1")
 
-# Explicit CPU
+# Force CPU even on a GPU machine
 model.train(dataset="data/", device="cpu")
 
 # Apple Silicon
 model.train(dataset="data/", device="mps")
-
-# Specific GPU index
-model.train(dataset="data/", device="cuda:1")
 ```
+
+You can check which device was selected by looking at the training log:
+
+```
+INFO  Trainer using device: cuda
+```
+
+Or after training:
+
+```python
+print(model.device)   # cuda  or  cpu
+```
+
+### GPU performance tips
+
+| Tip | Detail |
+|-----|--------|
+| Larger batch size | GPU throughput scales well — try 16 or 32 on a 8+ GB card |
+| DataLoader workers | Use `workers=2` or `workers=4` on multi-core Linux/macOS |
+| Larger variant | `pro` and `max` benefit most from GPU; `spark`/`flash` are already fast on CPU |
 
 ---
 
