@@ -51,7 +51,12 @@ class Inferencer:
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
-        self.device = device or torch.device("cpu")
+        if device is not None:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
 
         self.model.to(self.device)
         self.model.eval()

@@ -66,7 +66,13 @@ class Trainer:
         self.num_epochs = num_epochs
         self.num_workers = num_workers
         self.variant = variant
-        self.device = device or torch.device("cpu")
+        if device is not None:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+        logger.info(f"Trainer using device: {self.device}")
 
         # Resolve input size from variant default if not provided
         if input_size is None:
@@ -77,6 +83,7 @@ class Trainer:
         # ------------------------------------------------------------------ #
         # Data loaders                                                        #
         # ------------------------------------------------------------------ #
+        _pin = self.device.type == "cuda"
         logger.info("Building training dataloader …")
         self.train_loader, _ = create_dataloader(
             images_dir=self.dataset_path / "train" / "images",
@@ -86,6 +93,7 @@ class Trainer:
             shuffle=True,
             input_size=self.input_size,
             training=True,
+            pin_memory=_pin,
         )
 
         logger.info("Building validation dataloader …")
@@ -97,6 +105,7 @@ class Trainer:
             shuffle=False,
             input_size=self.input_size,
             training=False,
+            pin_memory=_pin,
         )
 
         # ------------------------------------------------------------------ #
@@ -134,10 +143,12 @@ class Trainer:
         epoch_loss = 0.0
         num_batches = 0
 
+        _nb = self.device.type == "cuda"
         for batch_idx, (images, targets) in enumerate(self.train_loader):
-            images = images.to(self.device)
+            images = images.to(self.device, non_blocking=_nb)
             targets = [
-                {k: v.to(self.device) for k, v in t.items()} for t in targets
+                {k: v.to(self.device, non_blocking=_nb) for k, v in t.items()}
+                for t in targets
             ]
 
             loss_dict = self.detection_model(images, targets)
@@ -173,11 +184,12 @@ class Trainer:
         epoch_loss = 0.0
         num_batches = 0
 
+        _nb = self.device.type == "cuda"
         with torch.no_grad():
             for images, targets in self.val_loader:
-                images = images.to(self.device)
+                images = images.to(self.device, non_blocking=_nb)
                 targets = [
-                    {k: v.to(self.device) for k, v in t.items()}
+                    {k: v.to(self.device, non_blocking=_nb) for k, v in t.items()}
                     for t in targets
                 ]
                 loss_dict = self.detection_model(images, targets)

@@ -246,6 +246,7 @@ def create_dataloader(
     shuffle: bool = True,
     input_size: int = 512,
     training: bool = True,
+    pin_memory: bool = False,
 ) -> Tuple[DataLoader, int]:
     """
     Create a DataLoader for the given images and labels directories.
@@ -267,8 +268,8 @@ def create_dataloader(
         shuffle=shuffle,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        pin_memory=False,
-        persistent_workers=False,
+        pin_memory=pin_memory,
+        persistent_workers=(num_workers > 0),
     )
 
     return loader, dataset.num_classes
