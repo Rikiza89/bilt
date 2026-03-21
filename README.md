@@ -9,7 +9,7 @@ BILT automatically uses a CUDA GPU when one is available. No configuration neede
 install a CUDA-enabled PyTorch build and BILT picks it up for both training and inference.
 
 > **License:** GNU Affero General Public License v3.0
-> **Copyright:** © 2024 Rikiza89
+> **Copyright:** © 2026 Rikiza89
 
 ---
 
@@ -317,8 +317,7 @@ BILT is an original work by **Rikiza89**, released under the
   focal loss, smooth-L1) is written from scratch and is not derived from any
   other project.
 - Pretrained backbone weights are loaded from **torchvision** (BSD/MIT licensed).
-- No code from Ultralytics, YOLO, or any other AGPL-encumbered project is
-  incorporated.
+- No code from any other AGPL-encumbered project is incorporated.
 
 See [LICENSE](LICENSE) for the full license text.
 

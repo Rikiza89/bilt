@@ -106,26 +106,27 @@ BILT also looks for `data.yml` and `dataset.yaml` if `data.yaml` is missing.
 
 ### LabelImg
 
-LabelImg can export directly in this format. Select **YOLO** as the output
-format in the application. The output `.txt` files are immediately compatible
-with BILT.
+LabelImg can export directly in this format. Select the plain-text
+bounding-box format (one `.txt` file per image, values in `[0, 1]`) as the
+output format in the application. The output `.txt` files are immediately
+compatible with BILT.
 
 ### Roboflow
 
 1. Upload your images and annotate them.
-2. Export → Format: **YOLOv5 PyTorch**.
+2. Export → Format: **"Darknet"** (normalised text labels, one `.txt` per image).
 3. The downloaded zip contains `train/`, `valid/` (rename to `val/`), and
    a `data.yaml`.
 
 ### CVAT
 
-1. Export annotations → **YOLO 1.1** format.
+1. Export annotations → **Darknet 1.1** (normalised text) format.
 2. The exported archive includes images and labels in the correct structure.
 
 ### Make Sense (makesense.ai)
 
 1. Annotate online.
-2. Export → **YOLO format**.
+2. Export → **"Plain text" / normalised bounding-box format**.
 
 ---
 

@@ -1,5 +1,5 @@
 # BILT (Because I Like Twice) - A PyTorch-based object detection library
-# Copyright (C) 2024 Rikiza89
+# Copyright (C) 2026 Rikiza89
 # Licensed under the GNU Affero General Public License v3.0
 
 import logging

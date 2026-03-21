@@ -52,9 +52,9 @@ Model sizes:
 
 ## License
 
-BILT is copyright © 2024 Rikiza89 and released under the
+BILT is copyright © 2026 Rikiza89 and released under the
 [GNU Affero General Public License v3.0](../LICENSE).
 
 The detection architecture (FPN neck, detection head, anchor system, focal
-loss) is written from scratch. No code from Ultralytics or any other
-AGPL-encumbered project is incorporated.
+loss) is written from scratch. No code from any other AGPL-encumbered
+project is incorporated.
