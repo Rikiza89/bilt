@@ -6,8 +6,9 @@
 BILT training engine.
 
 Handles the full training loop:
-  - Warm-up with frozen backbone (epochs 0–4)
-  - Gradual backbone unfreeze (epoch 5+)
+  - Head warm-up with frozen backbone (epochs 0–4), allowing the detection
+    head to stabilise before the backbone starts learning
+  - Backbone unfreeze (epoch 5+) — full end-to-end training from scratch
   - AdamW optimiser + cosine LR annealing
   - Gradient clipping
   - Best-checkpoint saving (lowest validation loss)
@@ -116,7 +117,6 @@ class Trainer:
             variant=variant,
             num_classes=num_classes,
             class_names=class_names,
-            pretrained=True,
         )
         self.detection_model.to(self.device)
 

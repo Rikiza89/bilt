@@ -55,16 +55,14 @@ class BILTDetector(nn.Module):
 
     Parameters
     ----------
-    variant              : str   Model variant name (spark/flash/core/pro/max).
-    num_classes          : int   Number of object categories.
-    pretrained_backbone  : bool  Use ImageNet-pretrained backbone weights.
+    variant     : str   Model variant name (spark/flash/core/pro/max).
+    num_classes : int   Number of object categories.
     """
 
     def __init__(
         self,
         variant: str,
         num_classes: int,
-        pretrained_backbone: bool = True,
     ):
         super().__init__()
 
@@ -77,9 +75,7 @@ class BILTDetector(nn.Module):
         # ------------------------------------------------------------------ #
         # Backbone                                                            #
         # ------------------------------------------------------------------ #
-        self.backbone = BILTBackbone(
-            cfg["backbone"], pretrained=pretrained_backbone
-        )
+        self.backbone = BILTBackbone(cfg["backbone"])
 
         # ------------------------------------------------------------------ #
         # Neck                                                                #
@@ -123,7 +119,7 @@ class BILTDetector(nn.Module):
         """
         Parameters
         ----------
-        images  : (B, 3, H, W)  normalised with ImageNet mean/std
+        images  : (B, 3, H, W)  normalised input
         targets : optional list of dicts (one per image), each containing:
                     "boxes"  : (G, 4)  [x1, y1, x2, y2] in pixel coords
                     "labels" : (G,)    class ids (1-indexed, no background)
@@ -283,7 +279,6 @@ class DetectionModel:
     variant      : str           Variant name (spark / flash / core / pro / max).
     num_classes  : int           Number of object categories.
     class_names  : list of str   Human-readable class names.
-    pretrained   : bool          Load pretrained backbone weights.
     """
 
     def __init__(
@@ -291,12 +286,11 @@ class DetectionModel:
         variant: str = DEFAULT_VARIANT,
         num_classes: int = 80,
         class_names: Optional[List[str]] = None,
-        pretrained: bool = True,
     ):
         self.variant = variant
         self.num_classes = num_classes
         self.class_names = class_names or [str(i) for i in range(1, num_classes + 1)]
-        self.model = BILTDetector(variant, num_classes, pretrained_backbone=pretrained)
+        self.model = BILTDetector(variant, num_classes)
 
     # ---------------------------------------------------------------------- #
     # Delegation                                                              #
@@ -369,7 +363,7 @@ class DetectionModel:
         num_classes = checkpoint["num_classes"]
         class_names = checkpoint.get("class_names", [])
 
-        detector = BILTDetector(variant, num_classes, pretrained_backbone=False)
+        detector = BILTDetector(variant, num_classes)
         detector.load_state_dict(checkpoint["model_state_dict"])
         detector.eval()
 

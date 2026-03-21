@@ -8,11 +8,11 @@ want to understand, extend, or audit the code.
 ## Overview
 
 ```
-Input image  (B, 3, H, W)  — normalised with ImageNet mean/std
+Input image  (B, 3, H, W)  — normalised
        │
  ┌─────▼──────────────────────────────────────────────┐
  │  BILTBackbone                                       │
- │  Pretrained feature extractor (MobileNet / ResNet)  │
+ │  Feature extractor (MobileNet / ResNet, random init)│
  │                                                     │
  │  C3 (stride 8,  ~H/8  × W/8 )                      │
  │  C4 (stride 16, ~H/16 × W/16)                      │
@@ -58,9 +58,10 @@ Input image  (B, 3, H, W)  — normalised with ImageNet mean/std
 
 `bilt/backbone.py`
 
-Wraps five torchvision pretrained models to expose three multi-scale feature
-maps. Each backbone is split at fixed layer boundaries to produce C3, C4, C5
-at stride 8, 16, 32 respectively.
+Wraps five torchvision backbone architectures to expose three multi-scale
+feature maps. All weights are randomly initialised and trained from scratch
+on the user's dataset. Each backbone is split at fixed layer boundaries to
+produce C3, C4, C5 at stride 8, 16, 32 respectively.
 
 | Variant | Backbone | C3 ch | C4 ch | C5 ch |
 |---------|----------|-------|-------|-------|
@@ -70,9 +71,9 @@ at stride 8, 16, 32 respectively.
 | pro | ResNet-50 | 512 | 1024 | 2048 |
 | max | ResNet-101 | 512 | 1024 | 2048 |
 
-**Warmup freezing:** The backbone is frozen for the first 5 training epochs
-so the randomly-initialised FPN and head can stabilise before the backbone
-weights are updated.
+**Head warmup:** The backbone is frozen for the first 5 training epochs
+so the randomly-initialised FPN and detection head can stabilise before
+full end-to-end training begins.
 
 ```python
 backbone.freeze()    # freeze all backbone parameters
@@ -247,12 +248,9 @@ All images are:
 1. Converted to RGB.
 2. Resized to the variant's `input_size × input_size` (nearest-neighbour for training, bilinear for inference via `T.Resize`).
 3. Converted to float tensor `[0, 1]`.
-4. Normalised: `(x - mean) / std` with ImageNet statistics:
+4. Normalised: `(x - mean) / std`:
    - mean = `[0.485, 0.456, 0.406]`
    - std  = `[0.229, 0.224, 0.225]`
-
-This normalisation is required because the backbone weights were pretrained
-on ImageNet with these statistics.
 
 ---
 

@@ -6,7 +6,7 @@
 |---------|----------------|---------|
 | Python | 3.8 | Language runtime |
 | torch | 1.10 | Neural network framework |
-| torchvision | 0.11 | Pretrained backbones, NMS |
+| torchvision | 0.11 | Backbone architectures, NMS |
 | Pillow | 8.0 | Image I/O |
 | numpy | 1.19 | Array operations |
 | pyyaml | 5.4 | Dataset config files |

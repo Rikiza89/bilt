@@ -18,7 +18,7 @@ metrics = model.train(
 BILT automatically:
 - Loads train and validation splits from `dataset/train/` and `dataset/val/`.
 - Reads class names from `data.yaml` if present.
-- Initialises the detector with pretrained backbone weights.
+- Initialises the detector with randomly initialised weights — training from scratch on your data.
 - **Selects the best available device** — CUDA GPU if present, otherwise CPU.
 - Enables `pin_memory` and `non_blocking` transfers when on CUDA.
 - Freezes the backbone for the first 5 epochs (warmup), then unfreezes it.

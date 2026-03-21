@@ -201,7 +201,7 @@ class TestArchitecture:
         from bilt.core import BILTDetector
 
         cfg = get_variant_config(variant)
-        det = BILTDetector(variant, num_classes=3, pretrained_backbone=False)
+        det = BILTDetector(variant, num_classes=3)
         det.eval()
 
         h = w = cfg["input_size"]
@@ -220,7 +220,7 @@ class TestArchitecture:
         from bilt.core import BILTDetector
 
         cfg = get_variant_config(variant)
-        det = BILTDetector(variant, num_classes=3, pretrained_backbone=False)
+        det = BILTDetector(variant, num_classes=3)
         det.train()
 
         h = w = cfg["input_size"]

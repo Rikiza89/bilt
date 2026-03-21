@@ -5,9 +5,9 @@
 """
 BILT inference engine.
 
-Handles image preprocessing (resize + ImageNet normalisation), model
-invocation, postprocessing (confidence filter + per-class NMS) and
-coordinate scaling back to the original image space.
+Handles image preprocessing (resize + normalisation), model invocation,
+postprocessing (confidence filter + per-class NMS) and coordinate scaling
+back to the original image space.
 """
 
 from pathlib import Path
@@ -17,7 +17,7 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 
-from .backbone import IMAGENET_MEAN, IMAGENET_STD
+from .backbone import NORM_MEAN, NORM_STD
 from .utils import get_logger
 
 logger = get_logger(__name__)
@@ -76,7 +76,7 @@ class Inferencer:
         self._transforms = T.Compose([
             T.Resize((self.input_size, self.input_size)),
             T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            T.Normalize(mean=NORM_MEAN, std=NORM_STD),
         ])
 
     # ---------------------------------------------------------------------- #

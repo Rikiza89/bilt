@@ -50,7 +50,7 @@ metrics = model.train(
 )
 ```
 
-Train a new detector from pretrained backbone weights.
+Train a new detector from scratch on the user's dataset.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -300,7 +300,6 @@ from bilt.core import BILTDetector
 detector = BILTDetector(
     variant="core",
     num_classes=3,
-    pretrained_backbone=True,
 )
 ```
 

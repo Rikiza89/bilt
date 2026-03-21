@@ -38,7 +38,7 @@ import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
-from .backbone import IMAGENET_MEAN, IMAGENET_STD
+from .backbone import NORM_MEAN, NORM_STD
 from .utils import get_logger, load_yaml_classes, parse_bilt_label
 
 logger = get_logger(__name__)
@@ -50,7 +50,7 @@ class ObjectDetectionDataset(Dataset):
 
     Loads images and their corresponding annotation files, remaps class IDs
     to a consecutive zero-indexed range, resizes images to *input_size* and
-    applies ImageNet normalisation so they are ready for pretrained backbones.
+    applies standard normalisation.
 
     Parameters
     ----------
@@ -209,8 +209,7 @@ def get_transforms(input_size: int = 512, training: bool = True) -> T.Compose:
     Build the preprocessing pipeline for the given split.
 
     Both training and validation images are resized and normalised with
-    ImageNet statistics so the pretrained backbones receive correctly
-    scaled inputs.
+    standard statistics before being fed into the model.
 
     Parameters
     ----------
@@ -220,7 +219,7 @@ def get_transforms(input_size: int = 512, training: bool = True) -> T.Compose:
     return T.Compose([
         T.Resize((input_size, input_size)),
         T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        T.Normalize(mean=NORM_MEAN, std=NORM_STD),
     ])
 
 

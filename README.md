@@ -17,7 +17,7 @@ install a CUDA-enabled PyTorch build and BILT picks it up for both training and 
 
 - **Five model sizes** — *spark / flash / core / pro / max* — each with a different backbone so you can choose the right speed/accuracy trade-off
 - **Original architecture** — custom FPN neck + anchor-based detection head + focal loss; no dependency on proprietary detection code
-- **Pretrained backbones** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (MIT/BSD-licensed, via torchvision)
+- **Five backbone architectures** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (via torchvision), all trained from scratch on your data
 - **Simple API** — `BILT("core")`, `.train()`, `.predict()`, `.evaluate()`, `.save()`, `.load()`
 - **GPU-first** — automatically uses CUDA when available; falls back to CPU seamlessly
 - **Pin-memory & non-blocking transfers** — DataLoader pins memory and tensor moves
@@ -230,7 +230,7 @@ names: [cat, dog, person]
 Input image (H×W)
       │
   ┌───▼────────────────────────┐
-  │  BILTBackbone              │  pretrained (MobileNet / ResNet)
+  │  BILTBackbone              │  MobileNet / ResNet (random init)
   │  C3 (1/8)  C4 (1/16)  C5 (1/32)
   └───┬────────────────────────┘
       │
@@ -316,7 +316,7 @@ BILT is an original work by **Rikiza89**, released under the
 - The detection architecture (FPN neck, detection head, anchor matching,
   focal loss, smooth-L1) is written from scratch and is not derived from any
   other project.
-- Pretrained backbone weights are loaded from **torchvision** (BSD/MIT licensed).
+- Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); all weights are trained from scratch on the user's dataset.
 - No code from any other AGPL-encumbered project is incorporated.
 
 See [LICENSE](LICENSE) for the full license text.
@@ -330,5 +330,5 @@ See [LICENSE](LICENSE) for the full license text.
 - [ ] ONNX and TensorRT export
 - [ ] Mixed-precision (fp16) training
 - [ ] Multi-GPU training
-- [ ] Pre-trained BILT checkpoints (spark / flash / core trained on COCO)
+- [ ] Model export — ONNX weights from user-trained checkpoints
 - [ ] Web demo (Gradio)

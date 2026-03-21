@@ -5,9 +5,11 @@
 """
 BILT backbone feature extractors.
 
-Wraps torchvision pretrained models to expose three multi-scale feature maps
-at 1/8, 1/16 and 1/32 of the input resolution (C3, C4, C5).  The neck
-(FPN) consumes these three scales and optionally adds a 1/64 level.
+Wraps torchvision backbone architectures to expose three multi-scale feature
+maps at 1/8, 1/16 and 1/32 of the input resolution (C3, C4, C5).  All
+weights are randomly initialised — the full model is trained from scratch
+on the user's dataset.  The neck (FPN) consumes these three scales and
+optionally adds a 1/64 level.
 
 Supported backbones
 -------------------
@@ -24,10 +26,10 @@ from torchvision import models
 from typing import List
 
 # ---------------------------------------------------------------------------
-# ImageNet normalisation constants (kept here for convenience)
+# Normalisation constants used by the preprocessing pipeline
 # ---------------------------------------------------------------------------
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD  = [0.229, 0.224, 0.225]
+NORM_MEAN = [0.485, 0.456, 0.406]
+NORM_STD  = [0.229, 0.224, 0.225]
 
 
 # ---------------------------------------------------------------------------
@@ -42,10 +44,9 @@ class _MobileNetV2Backbone(nn.Module):
     Output strides : 8,    16,    32
     """
 
-    def __init__(self, pretrained: bool = True):
+    def __init__(self):
         super().__init__()
-        weights = models.MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
-        m = models.mobilenet_v2(weights=weights)
+        m = models.mobilenet_v2(weights=None)
         feats = list(m.features)
         # Split the sequential feature list into three groups
         self.stage1 = nn.Sequential(*feats[:7])    # → 32 ch,   stride 8
@@ -68,10 +69,9 @@ class _MobileNetV3SmallBackbone(nn.Module):
     Output strides : 8,    16,    32
     """
 
-    def __init__(self, pretrained: bool = True):
+    def __init__(self):
         super().__init__()
-        weights = models.MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
-        m = models.mobilenet_v3_small(weights=weights)
+        m = models.mobilenet_v3_small(weights=None)
         feats = list(m.features)
         self.stage1 = nn.Sequential(*feats[:4])    # → 24 ch,  stride 8
         self.stage2 = nn.Sequential(*feats[4:9])   # → 48 ch,  stride 16
@@ -93,10 +93,9 @@ class _MobileNetV3LargeBackbone(nn.Module):
     Output strides : 8,     16,     32
     """
 
-    def __init__(self, pretrained: bool = True):
+    def __init__(self):
         super().__init__()
-        weights = models.MobileNet_V3_Large_Weights.IMAGENET1K_V1 if pretrained else None
-        m = models.mobilenet_v3_large(weights=weights)
+        m = models.mobilenet_v3_large(weights=None)
         feats = list(m.features)
         self.stage1 = nn.Sequential(*feats[:7])    # → 40 ch,  stride 8
         self.stage2 = nn.Sequential(*feats[7:13])  # → 112 ch, stride 16
@@ -118,14 +117,12 @@ class _ResNetBackbone(nn.Module):
     Output strides : 8,      16,      32
     """
 
-    def __init__(self, depth: int = 50, pretrained: bool = True):
+    def __init__(self, depth: int = 50):
         super().__init__()
         if depth == 50:
-            weights = models.ResNet50_Weights.IMAGENET1K_V1 if pretrained else None
-            m = models.resnet50(weights=weights)
+            m = models.resnet50(weights=None)
         elif depth == 101:
-            weights = models.ResNet101_Weights.IMAGENET1K_V1 if pretrained else None
-            m = models.resnet101(weights=weights)
+            m = models.resnet101(weights=None)
         else:
             raise ValueError(f"Unsupported ResNet depth: {depth}. Use 50 or 101.")
 
@@ -151,11 +148,11 @@ class _ResNetBackbone(nn.Module):
 # ---------------------------------------------------------------------------
 
 _BACKBONE_MAP = {
-    "mobilenet_v2":       lambda p: _MobileNetV2Backbone(pretrained=p),
-    "mobilenet_v3_small": lambda p: _MobileNetV3SmallBackbone(pretrained=p),
-    "mobilenet_v3_large": lambda p: _MobileNetV3LargeBackbone(pretrained=p),
-    "resnet50":           lambda p: _ResNetBackbone(depth=50, pretrained=p),
-    "resnet101":          lambda p: _ResNetBackbone(depth=101, pretrained=p),
+    "mobilenet_v2":       lambda: _MobileNetV2Backbone(),
+    "mobilenet_v3_small": lambda: _MobileNetV3SmallBackbone(),
+    "mobilenet_v3_large": lambda: _MobileNetV3LargeBackbone(),
+    "resnet50":           lambda: _ResNetBackbone(depth=50),
+    "resnet101":          lambda: _ResNetBackbone(depth=101),
 }
 
 
@@ -163,23 +160,25 @@ class BILTBackbone(nn.Module):
     """
     Unified backbone wrapper used by BILTDetector.
 
+    All weights are randomly initialised. Training from scratch on the
+    user's dataset is the only supported mode — there are no pretrained
+    weights to download or configure.
+
     Parameters
     ----------
     backbone_name : str
         One of ``mobilenet_v2``, ``mobilenet_v3_small``,
         ``mobilenet_v3_large``, ``resnet50``, ``resnet101``.
-    pretrained : bool
-        Load ImageNet-pretrained weights (default True).
     """
 
-    def __init__(self, backbone_name: str, pretrained: bool = True):
+    def __init__(self, backbone_name: str):
         super().__init__()
         if backbone_name not in _BACKBONE_MAP:
             raise ValueError(
                 f"Unknown backbone '{backbone_name}'. "
                 f"Supported: {list(_BACKBONE_MAP.keys())}"
             )
-        self._backbone = _BACKBONE_MAP[backbone_name](pretrained)
+        self._backbone = _BACKBONE_MAP[backbone_name]()
         self.out_channels: List[int] = self._backbone.out_channels
         self.backbone_name = backbone_name
 
@@ -187,7 +186,7 @@ class BILTBackbone(nn.Module):
         """
         Parameters
         ----------
-        x : Tensor  (B, 3, H, W)   normalised with ImageNet stats
+        x : Tensor  (B, 3, H, W)   normalised input
 
         Returns
         -------
@@ -196,11 +195,11 @@ class BILTBackbone(nn.Module):
         return self._backbone(x)
 
     def freeze(self) -> None:
-        """Freeze all backbone weights (useful for warmup training)."""
+        """Freeze all backbone parameters (used during head warmup)."""
         for p in self._backbone.parameters():
             p.requires_grad = False
 
     def unfreeze(self) -> None:
-        """Unfreeze all backbone weights."""
+        """Unfreeze all backbone parameters."""
         for p in self._backbone.parameters():
             p.requires_grad = True
