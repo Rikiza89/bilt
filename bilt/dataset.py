@@ -30,11 +30,13 @@ data.yaml format
     nc: 3
 """
 
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torchvision.transforms as T
+import torchvision.transforms.functional as TF
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
@@ -66,11 +68,13 @@ class ObjectDetectionDataset(Dataset):
         labels_dir: Path,
         transforms=None,
         input_size: int = 512,
+        training: bool = False,
     ):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
         self.transforms = transforms
         self.input_size = input_size
+        self.training = training
 
         # Discover image files
         self.image_files: List[Path] = []
@@ -150,6 +154,21 @@ class ObjectDetectionDataset(Dataset):
         else:
             boxes  = torch.zeros((0, 4), dtype=torch.float32)
             labels = torch.zeros((0,),   dtype=torch.int64)
+
+        # Bbox-safe augmentation (training split only)
+        if self.training:
+            # Random horizontal flip — mirror boxes along the x-axis
+            if random.random() < 0.5:
+                img = TF.hflip(img)
+                if boxes.numel() > 0:
+                    flipped = boxes.clone()
+                    flipped[:, 0] = orig_w - boxes[:, 2]
+                    flipped[:, 2] = orig_w - boxes[:, 0]
+                    boxes = flipped
+            # Color jitter — brightness, contrast, saturation, hue variation
+            img = T.ColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
+            )(img)
 
         # Apply transforms (resize + to-tensor + normalise)
         if self.transforms:
@@ -259,6 +278,7 @@ def create_dataloader(
         labels_dir=labels_dir,
         transforms=get_transforms(input_size, training),
         input_size=input_size,
+        training=training,
     )
 
     loader = DataLoader(

@@ -383,6 +383,33 @@ def get_optimizer(model: nn.Module, learning_rate: float = 5e-4) -> torch.optim.
     return torch.optim.AdamW(params, lr=learning_rate, weight_decay=1e-4)
 
 
+def get_optimizer_differential(
+    model: nn.Module,
+    learning_rate: float = 5e-4,
+    backbone_lr_multiplier: float = 0.1,
+) -> torch.optim.Optimizer:
+    """AdamW with a lower learning rate for the pretrained backbone.
+
+    The backbone already carries ImageNet features; training it at the same
+    rate as the randomly-initialised head risks destroying those features.
+    A 10× lower rate lets the head drive learning while the backbone adapts
+    gently to the new domain.
+    """
+    backbone_ids = {id(p) for p in model.backbone.parameters()}
+    backbone_params = [p for p in model.backbone.parameters() if p.requires_grad]
+    head_params = [
+        p for p in model.parameters()
+        if p.requires_grad and id(p) not in backbone_ids
+    ]
+    return torch.optim.AdamW(
+        [
+            {"params": head_params,     "lr": learning_rate},
+            {"params": backbone_params, "lr": learning_rate * backbone_lr_multiplier},
+        ],
+        weight_decay=1e-4,
+    )
+
+
 def get_lr_scheduler(
     optimizer: torch.optim.Optimizer, num_epochs: int
 ) -> torch.optim.lr_scheduler.LRScheduler:

@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, Optional
 
 import torch
 
-from .core import DetectionModel, get_lr_scheduler, get_optimizer
+from .core import DetectionModel, get_lr_scheduler, get_optimizer, get_optimizer_differential
 from .dataset import create_dataloader
 from .utils import get_logger
 from .variants import DEFAULT_VARIANT
@@ -230,17 +230,28 @@ class Trainer:
         for epoch in range(self.num_epochs):
             self.current_epoch = epoch
 
-            # Backbone warmup: freeze for first 5 epochs
+            # Backbone warmup: freeze for first 3 epochs so the randomly-
+            # initialised head can stabilise before touching pretrained features.
             if epoch == 0:
-                logger.info("Warming up: backbone frozen for first 5 epochs.")
+                logger.info("Warming up: backbone frozen for first 3 epochs.")
                 self.detection_model.model.backbone.freeze()
-            if epoch == 5:
-                logger.info("Unfreezing backbone.")
+            if epoch == 3:
+                logger.info(
+                    "Unfreezing backbone with differential LR "
+                    f"(backbone={self.learning_rate * 0.1:.1e}, "
+                    f"head={self.learning_rate:.1e})."
+                )
                 self.detection_model.model.backbone.unfreeze()
-                # Reinitialise optimiser so unfrozen params are included
-                self.optimizer = get_optimizer(
+                # Reinitialise optimiser with differential LR so the pretrained
+                # backbone adapts gently while the head drives learning.
+                self.optimizer = get_optimizer_differential(
                     self.detection_model.model, self.learning_rate
                 )
+                # Reinitialise the scheduler to track the new optimiser for the
+                # remaining epochs (fixes a bug where the old scheduler kept
+                # stepping a detached optimiser).
+                remaining = self.num_epochs - epoch
+                self.scheduler = get_lr_scheduler(self.optimizer, remaining)
 
             train_loss = self.train_one_epoch()
             self.training_losses.append(train_loss)

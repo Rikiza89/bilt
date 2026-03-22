@@ -6,10 +6,10 @@
 BILT backbone feature extractors.
 
 Wraps torchvision backbone architectures to expose three multi-scale feature
-maps at 1/8, 1/16 and 1/32 of the input resolution (C3, C4, C5).  All
-weights are randomly initialised — the full model is trained from scratch
-on the user's dataset.  The neck (FPN) consumes these three scales and
-optionally adds a 1/64 level.
+maps at 1/8, 1/16 and 1/32 of the input resolution (C3, C4, C5).  Backbones
+are initialised with ImageNet pretrained weights by default, which dramatically
+improves convergence on small datasets (even 2 images).  The neck (FPN)
+consumes these three scales and optionally adds a 1/64 level.
 
 Supported backbones
 -------------------
@@ -24,6 +24,16 @@ import torch
 import torch.nn as nn
 from torchvision import models
 from typing import List
+
+
+def _pretrained(model_fn, **kwargs):
+    """Load a torchvision model with ImageNet weights, compatible with both
+    the new (torchvision ≥0.13) ``weights="DEFAULT"`` API and the legacy
+    ``pretrained=True`` API used by older installs."""
+    try:
+        return model_fn(weights="DEFAULT", **kwargs)
+    except TypeError:
+        return model_fn(pretrained=True, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Normalisation constants used by the preprocessing pipeline
@@ -46,7 +56,7 @@ class _MobileNetV2Backbone(nn.Module):
 
     def __init__(self):
         super().__init__()
-        m = models.mobilenet_v2(weights=None)
+        m = _pretrained(models.mobilenet_v2)
         feats = list(m.features)
         # Split the sequential feature list into three groups
         self.stage1 = nn.Sequential(*feats[:7])    # → 32 ch,   stride 8
@@ -71,7 +81,7 @@ class _MobileNetV3SmallBackbone(nn.Module):
 
     def __init__(self):
         super().__init__()
-        m = models.mobilenet_v3_small(weights=None)
+        m = _pretrained(models.mobilenet_v3_small)
         feats = list(m.features)
         self.stage1 = nn.Sequential(*feats[:4])    # → 24 ch,  stride 8
         self.stage2 = nn.Sequential(*feats[4:9])   # → 48 ch,  stride 16
@@ -95,7 +105,7 @@ class _MobileNetV3LargeBackbone(nn.Module):
 
     def __init__(self):
         super().__init__()
-        m = models.mobilenet_v3_large(weights=None)
+        m = _pretrained(models.mobilenet_v3_large)
         feats = list(m.features)
         self.stage1 = nn.Sequential(*feats[:7])    # → 40 ch,  stride 8
         self.stage2 = nn.Sequential(*feats[7:13])  # → 112 ch, stride 16
@@ -120,9 +130,9 @@ class _ResNetBackbone(nn.Module):
     def __init__(self, depth: int = 50):
         super().__init__()
         if depth == 50:
-            m = models.resnet50(weights=None)
+            m = _pretrained(models.resnet50)
         elif depth == 101:
-            m = models.resnet101(weights=None)
+            m = _pretrained(models.resnet101)
         else:
             raise ValueError(f"Unsupported ResNet depth: {depth}. Use 50 or 101.")
 
@@ -160,9 +170,10 @@ class BILTBackbone(nn.Module):
     """
     Unified backbone wrapper used by BILTDetector.
 
-    All weights are randomly initialised. Training from scratch on the
-    user's dataset is the only supported mode — there are no pretrained
-    weights to download or configure.
+    Backbones are initialised with ImageNet pretrained weights, which
+    provides rich low-level and semantic features out of the box.  This
+    is the single most important factor for getting good detections with
+    very few training images (as few as 2).
 
     Parameters
     ----------
