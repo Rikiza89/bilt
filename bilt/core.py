@@ -327,12 +327,24 @@ class DetectionModel:
         class_names: Optional[List[str]] = None,
         class_id_mapping: Optional[dict] = None,
     ) -> None:
-        """Save model checkpoint to *save_path*."""
+        """Save model checkpoint to *save_path*.
+
+        Weights are stored in float16 to halve disk usage.  They are
+        transparently upcast back to float32 by :meth:`load`.
+        """
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Downcast floating-point tensors to float16 — this cuts file size in
+        # half with no meaningful loss of precision for stored weights.
+        half_sd = {
+            k: v.half() if v.is_floating_point() else v
+            for k, v in self.model.state_dict().items()
+        }
+
         checkpoint = {
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": half_sd,
+            "storage_dtype":    "float16",
             "num_classes":      self.num_classes,
             "class_names":      class_names or self.class_names,
             "variant":          self.variant,
@@ -366,8 +378,17 @@ class DetectionModel:
         num_classes = checkpoint["num_classes"]
         class_names = checkpoint.get("class_names", [])
 
+        # Upcast float16 storage weights back to float32 for inference.
+        # Old checkpoints without the flag are loaded as-is (float32).
+        sd = checkpoint["model_state_dict"]
+        if checkpoint.get("storage_dtype") == "float16":
+            sd = {
+                k: v.float() if v.is_floating_point() else v
+                for k, v in sd.items()
+            }
+
         detector = BILTDetector(variant, num_classes)
-        detector.load_state_dict(checkpoint["model_state_dict"])
+        detector.load_state_dict(sd)
         detector.eval()
 
         logger.info(

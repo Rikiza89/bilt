@@ -346,8 +346,13 @@ class BILT:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        half_sd = {
+            k: v.half() if v.is_floating_point() else v
+            for k, v in self.model.state_dict().items()
+        }
         checkpoint = {
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": half_sd,
+            "storage_dtype":    "float16",
             "num_classes":      self.num_classes,
             "class_names":      self.class_names,
             "variant":          getattr(self.model, "variant", self._variant),
