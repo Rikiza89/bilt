@@ -143,20 +143,25 @@ class AnchorGenerator:
     """
     Generates anchor boxes for each FPN level.
 
-    Each FPN level has one base size and N aspect ratios, giving N anchors
-    per spatial location.
+    Each FPN level has one base size, S octave scales and R aspect ratios,
+    giving S×R anchors per spatial location.  The octave scales (default
+    1.0, 1.26, 1.587 — i.e. ×∛2 steps within each octave) ensure that
+    every object size is covered by at least one anchor with IoU > 0.5,
+    which is essential for getting positive matches in small datasets.
 
     Parameters
     ----------
-    strides       : list of int   Spatial stride for each FPN level.
-    anchor_sizes  : list of int   Base anchor size for each level.
-    aspect_ratios : tuple of float  Width/height ratios, e.g. (0.5, 1.0, 2.0).
+    strides       : list of int    Spatial stride for each FPN level.
+    anchor_sizes  : list of int    Base anchor size for each level.
+    anchor_scales : tuple of float Octave scale multipliers (default RetinaNet style).
+    aspect_ratios : tuple of float Width/height ratios, e.g. (0.5, 1.0, 2.0).
     """
 
     def __init__(
         self,
         strides: List[int],
         anchor_sizes: List[int],
+        anchor_scales: Tuple[float, ...] = (1.0, 1.26, 1.587),
         aspect_ratios: Tuple[float, ...] = (0.5, 1.0, 2.0),
     ):
         assert len(strides) == len(anchor_sizes), (
@@ -164,16 +169,23 @@ class AnchorGenerator:
         )
         self.strides = strides
         self.anchor_sizes = anchor_sizes
+        self.anchor_scales = anchor_scales
         self.aspect_ratios = aspect_ratios
-        self.num_anchors = len(aspect_ratios)
+        self.num_anchors = len(anchor_scales) * len(aspect_ratios)
 
     def _base_anchors(self, size: int, device: torch.device) -> torch.Tensor:
-        """Build (num_anchors, 4) base anchors centred at origin."""
+        """Build (num_anchors, 4) base anchors centred at origin.
+
+        Iterates over all (scale, ratio) combinations so that each level
+        covers a continuous range of object sizes within the octave.
+        """
         anchors = []
-        for ratio in self.aspect_ratios:
-            w = size * math.sqrt(ratio)
-            h = size / math.sqrt(ratio)
-            anchors.append([-w / 2, -h / 2, w / 2, h / 2])
+        for scale in self.anchor_scales:
+            scaled = size * scale
+            for ratio in self.aspect_ratios:
+                w = scaled * math.sqrt(ratio)
+                h = scaled / math.sqrt(ratio)
+                anchors.append([-w / 2, -h / 2, w / 2, h / 2])
         return torch.tensor(anchors, dtype=torch.float32, device=device)
 
     def __call__(
@@ -237,7 +249,7 @@ class AnchorMatcher:
     neg_thresh : float   IoU threshold below which an anchor is negative.
     """
 
-    def __init__(self, pos_thresh: float = 0.5, neg_thresh: float = 0.4):
+    def __init__(self, pos_thresh: float = 0.35, neg_thresh: float = 0.25):
         self.pos_thresh = pos_thresh
         self.neg_thresh = neg_thresh
 

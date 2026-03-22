@@ -52,7 +52,7 @@ class Trainer:
         num_classes: int,
         class_names: list,
         batch_size: int = 4,
-        learning_rate: float = 5e-4,
+        learning_rate: float = 2e-3,
         num_epochs: int = 50,
         num_workers: int = 0,
         input_size: Optional[int] = None,

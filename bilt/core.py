@@ -86,11 +86,14 @@ class BILTDetector(nn.Module):
         # ------------------------------------------------------------------ #
         # Anchor generator                                                    #
         # ------------------------------------------------------------------ #
-        num_anchors = len(cfg["anchor_aspect_ratios"])
+        _scales = cfg.get("anchor_scales", (1.0, 1.26, 1.587))
+        _ratios = cfg["anchor_aspect_ratios"]
+        num_anchors = len(_scales) * len(_ratios)
         self.anchor_gen = AnchorGenerator(
             strides=_FPN_STRIDES,
             anchor_sizes=cfg["anchor_sizes"],
-            aspect_ratios=cfg["anchor_aspect_ratios"],
+            anchor_scales=_scales,
+            aspect_ratios=_ratios,
         )
 
         # ------------------------------------------------------------------ #
@@ -202,7 +205,7 @@ class BILTDetector(nn.Module):
         box_preds: torch.Tensor,
         anchors: torch.Tensor,
         image_shape: Tuple[int, int],
-        score_threshold: float = 0.05,
+        score_threshold: float = 0.01,
         nms_iou_threshold: float = 0.5,
         max_detections: int = 300,
     ) -> List[Dict[str, torch.Tensor]]:

@@ -101,7 +101,7 @@ class BILT:
     def predict(
         self,
         source: Union[str, Path, "Image.Image", np.ndarray, List],
-        conf: float = 0.25,
+        conf: float = 0.15,
         iou: float = 0.45,
         img_size: Optional[int] = None,
         return_images: bool = False,
@@ -174,7 +174,7 @@ class BILT:
         epochs: int = 50,
         batch_size: int = 4,
         img_size: Optional[int] = None,
-        learning_rate: float = 5e-4,
+        learning_rate: float = 2e-3,
         device: Optional[str] = None,
         save_dir: Union[str, Path] = "runs/train",
         name: str = "exp",

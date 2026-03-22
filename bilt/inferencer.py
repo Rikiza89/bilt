@@ -41,7 +41,7 @@ class Inferencer:
         self,
         model,
         class_names: List[str],
-        confidence_threshold: float = 0.25,
+        confidence_threshold: float = 0.15,
         nms_threshold: float = 0.45,
         input_size: int = 512,
         device: Optional[torch.device] = None,
