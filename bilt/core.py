@@ -401,16 +401,21 @@ class DetectionModel:
 # Optimizer / scheduler helpers (used by Trainer)
 # ---------------------------------------------------------------------------
 
-def get_optimizer(model: nn.Module, learning_rate: float = 5e-4) -> torch.optim.Optimizer:
+def get_optimizer(
+    model: nn.Module,
+    learning_rate: float = 5e-4,
+    weight_decay: float = 1e-4,
+) -> torch.optim.Optimizer:
     """AdamW optimizer for detection training."""
     params = [p for p in model.parameters() if p.requires_grad]
-    return torch.optim.AdamW(params, lr=learning_rate, weight_decay=1e-4)
+    return torch.optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
 
 
 def get_optimizer_differential(
     model: nn.Module,
     learning_rate: float = 5e-4,
     backbone_lr_multiplier: float = 0.1,
+    weight_decay: float = 1e-4,
 ) -> torch.optim.Optimizer:
     """AdamW with a lower learning rate for the pretrained backbone.
 
@@ -430,14 +435,16 @@ def get_optimizer_differential(
             {"params": head_params,     "lr": learning_rate},
             {"params": backbone_params, "lr": learning_rate * backbone_lr_multiplier},
         ],
-        weight_decay=1e-4,
+        weight_decay=weight_decay,
     )
 
 
 def get_lr_scheduler(
-    optimizer: torch.optim.Optimizer, num_epochs: int
+    optimizer: torch.optim.Optimizer,
+    num_epochs: int,
+    eta_min: float = 1e-6,
 ) -> torch.optim.lr_scheduler.LRScheduler:
-    """Cosine annealing decay to eta_min=1e-6."""
+    """Cosine annealing LR decay."""
     return torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=num_epochs, eta_min=1e-6
+        optimizer, T_max=num_epochs, eta_min=eta_min
     )

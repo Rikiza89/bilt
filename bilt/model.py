@@ -179,6 +179,21 @@ class BILT:
         save_dir: Union[str, Path] = "runs/train",
         name: str = "exp",
         variant: Optional[str] = None,
+        workers: int = 0,
+        # Training loop
+        warmup_epochs: int = 3,
+        backbone_lr_mult: float = 0.1,
+        weight_decay: float = 1e-4,
+        cos_lr_min: float = 1e-6,
+        grad_clip: float = 5.0,
+        # Loss
+        focal_alpha: float = 0.25,
+        focal_gamma: float = 2.0,
+        box_loss_weight: float = 1.0,
+        # Augmentation
+        augment: bool = True,
+        flip_prob: float = 0.5,
+        color_jitter: Optional[tuple] = (0.4, 0.4, 0.4, 0.1),
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -186,17 +201,29 @@ class BILT:
 
         Parameters
         ----------
-        dataset       : Root directory containing train/ and val/ splits.
-        epochs        : Number of training epochs.
-        batch_size    : Images per batch (minimum 2 for BatchNorm).
-        img_size      : Input resolution; defaults to the variant's setting.
-        learning_rate : Initial learning rate for AdamW.
-        device        : Override device (e.g. ``"cuda"``).
-        save_dir      : Parent directory for training run outputs.
-        name          : Run sub-directory name (auto-incremented if exists).
-        variant       : Override the variant to train (e.g. ``"pro"``).
-        **kwargs      : Extra options passed to :class:`~bilt.trainer.Trainer`
-                        (e.g. ``workers=2``).
+        dataset          : Root directory containing train/ and val/ splits.
+        epochs           : Number of training epochs.
+        batch_size       : Images per batch (minimum 2).
+        img_size         : Input resolution; defaults to the variant's setting.
+        learning_rate    : Initial AdamW learning rate for the detection head.
+        device           : Override device (``"cpu"``, ``"cuda"``, ``"mps"``).
+        save_dir         : Parent directory for training run outputs.
+        name             : Run sub-directory name (auto-incremented if exists).
+        variant          : Override the model variant (``"spark"``…``"max"``).
+        workers          : DataLoader worker processes (0 = main process).
+        warmup_epochs    : Epochs to keep backbone frozen (0 = no warmup).
+        backbone_lr_mult : Backbone LR = learning_rate * backbone_lr_mult.
+        weight_decay     : AdamW weight decay.
+        cos_lr_min       : Cosine annealing minimum learning rate.
+        grad_clip        : Gradient clipping max-norm (0 = disabled).
+        focal_alpha      : Focal loss alpha (class-balance weight).
+        focal_gamma      : Focal loss gamma (focusing strength).
+        box_loss_weight  : Regression loss weight relative to classification.
+        augment          : Enable/disable training augmentation.
+        flip_prob        : Probability of random horizontal flip (0–1).
+        color_jitter     : (brightness, contrast, saturation, hue) jitter
+                           magnitudes, or None to disable.
+        **kwargs         : Passed through to Trainer for forward-compatibility.
 
         Returns
         -------
@@ -264,10 +291,21 @@ class BILT:
             batch_size=batch_size,
             learning_rate=learning_rate,
             num_epochs=epochs,
-            num_workers=kwargs.get("workers", 0),
+            num_workers=workers,
             input_size=img_size,
             device=self.device,
             variant=active_variant,
+            warmup_epochs=warmup_epochs,
+            backbone_lr_mult=backbone_lr_mult,
+            weight_decay=weight_decay,
+            cos_lr_min=cos_lr_min,
+            grad_clip=grad_clip,
+            focal_alpha=focal_alpha,
+            focal_gamma=focal_gamma,
+            box_loss_weight=box_loss_weight,
+            augment=augment,
+            flip_prob=flip_prob,
+            color_jitter=color_jitter,
         )
 
         results = trainer.train(model_path)

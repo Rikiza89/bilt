@@ -69,12 +69,19 @@ class ObjectDetectionDataset(Dataset):
         transforms=None,
         input_size: int = 512,
         training: bool = False,
+        augment: Optional[bool] = None,
+        flip_prob: float = 0.5,
+        color_jitter: Optional[Tuple[float, float, float, float]] = (0.4, 0.4, 0.4, 0.1),
     ):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
         self.transforms = transforms
         self.input_size = input_size
         self.training = training
+        # augment defaults to True for training split, False for val
+        self.augment = training if augment is None else augment
+        self.flip_prob = flip_prob
+        self.color_jitter = color_jitter
 
         # Discover image files
         self.image_files: List[Path] = []
@@ -155,10 +162,10 @@ class ObjectDetectionDataset(Dataset):
             boxes  = torch.zeros((0, 4), dtype=torch.float32)
             labels = torch.zeros((0,),   dtype=torch.int64)
 
-        # Bbox-safe augmentation (training split only)
-        if self.training:
+        # Bbox-safe augmentation (controlled by self.augment)
+        if self.augment:
             # Random horizontal flip — mirror boxes along the x-axis
-            if random.random() < 0.5:
+            if random.random() < self.flip_prob:
                 img = TF.hflip(img)
                 if boxes.numel() > 0:
                     flipped = boxes.clone()
@@ -166,9 +173,9 @@ class ObjectDetectionDataset(Dataset):
                     flipped[:, 2] = orig_w - boxes[:, 0]
                     boxes = flipped
             # Color jitter — brightness, contrast, saturation, hue variation
-            img = T.ColorJitter(
-                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
-            )(img)
+            if self.color_jitter is not None:
+                b, c, s, h = self.color_jitter
+                img = T.ColorJitter(brightness=b, contrast=c, saturation=s, hue=h)(img)
 
         # Apply transforms (resize + to-tensor + normalise)
         if self.transforms:
@@ -265,6 +272,9 @@ def create_dataloader(
     input_size: int = 512,
     training: bool = True,
     pin_memory: bool = False,
+    augment: Optional[bool] = None,
+    flip_prob: float = 0.5,
+    color_jitter: Optional[Tuple[float, float, float, float]] = (0.4, 0.4, 0.4, 0.1),
 ) -> Tuple[DataLoader, int]:
     """
     Create a DataLoader for the given images and labels directories.
@@ -279,6 +289,9 @@ def create_dataloader(
         transforms=get_transforms(input_size, training),
         input_size=input_size,
         training=training,
+        augment=augment,
+        flip_prob=flip_prob,
+        color_jitter=color_jitter,
     )
 
     loader = DataLoader(

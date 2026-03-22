@@ -16,12 +16,13 @@ Handles the full training loop:
 
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 
 from .core import DetectionModel, get_lr_scheduler, get_optimizer, get_optimizer_differential
 from .dataset import create_dataloader
+from .loss import BILTLoss
 from .utils import get_logger
 from .variants import DEFAULT_VARIANT
 
@@ -58,6 +59,20 @@ class Trainer:
         input_size: Optional[int] = None,
         device: Optional[torch.device] = None,
         variant: str = DEFAULT_VARIANT,
+        # Training loop
+        warmup_epochs: int = 3,
+        backbone_lr_mult: float = 0.1,
+        weight_decay: float = 1e-4,
+        cos_lr_min: float = 1e-6,
+        grad_clip: float = 5.0,
+        # Loss
+        focal_alpha: float = 0.25,
+        focal_gamma: float = 2.0,
+        box_loss_weight: float = 1.0,
+        # Augmentation
+        augment: bool = True,
+        flip_prob: float = 0.5,
+        color_jitter: Optional[Tuple[float, float, float, float]] = (0.4, 0.4, 0.4, 0.1),
     ):
         self.dataset_path = Path(dataset_path)
         self.num_classes = num_classes
@@ -67,6 +82,12 @@ class Trainer:
         self.num_epochs = num_epochs
         self.num_workers = num_workers
         self.variant = variant
+        self.warmup_epochs = warmup_epochs
+        self.backbone_lr_mult = backbone_lr_mult
+        self.weight_decay = weight_decay
+        self.cos_lr_min = cos_lr_min
+        self.grad_clip = grad_clip
+
         if device is not None:
             self.device = device
         elif torch.cuda.is_available():
@@ -95,6 +116,9 @@ class Trainer:
             input_size=self.input_size,
             training=True,
             pin_memory=_pin,
+            augment=augment,
+            flip_prob=flip_prob,
+            color_jitter=color_jitter,
         )
 
         logger.info("Building validation dataloader …")
@@ -120,13 +144,28 @@ class Trainer:
         )
         self.detection_model.to(self.device)
 
+        # Override the loss criterion with user-supplied hyperparameters
+        self.detection_model.model.criterion = BILTLoss(
+            num_classes,
+            alpha=focal_alpha,
+            gamma=focal_gamma,
+            box_weight=box_loss_weight,
+        )
+
         # ------------------------------------------------------------------ #
         # Optimiser and LR scheduler                                         #
         # ------------------------------------------------------------------ #
-        self.optimizer = get_optimizer(
-            self.detection_model.model, learning_rate
-        )
-        self.scheduler = get_lr_scheduler(self.optimizer, num_epochs)
+        # If warmup is disabled, use differential LR from the start so the
+        # pretrained backbone always trains at a lower rate than the head.
+        if warmup_epochs > 0:
+            self.optimizer = get_optimizer(
+                self.detection_model.model, learning_rate, weight_decay
+            )
+        else:
+            self.optimizer = get_optimizer_differential(
+                self.detection_model.model, learning_rate, backbone_lr_mult, weight_decay
+            )
+        self.scheduler = get_lr_scheduler(self.optimizer, num_epochs, cos_lr_min)
 
         # Training state
         self.current_epoch = 0
@@ -157,7 +196,7 @@ class Trainer:
             self.optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                self.detection_model.model.parameters(), max_norm=5.0
+                self.detection_model.model.parameters(), max_norm=self.grad_clip
             )
             self.optimizer.step()
 
@@ -230,28 +269,31 @@ class Trainer:
         for epoch in range(self.num_epochs):
             self.current_epoch = epoch
 
-            # Backbone warmup: freeze for first 3 epochs so the randomly-
-            # initialised head can stabilise before touching pretrained features.
-            if epoch == 0:
-                logger.info("Warming up: backbone frozen for first 3 epochs.")
+            # Backbone warmup: freeze backbone for the first warmup_epochs so
+            # the randomly-initialised head can stabilise before touching
+            # pretrained features.  warmup_epochs=0 skips this entirely.
+            if epoch == 0 and self.warmup_epochs > 0:
+                logger.info(
+                    f"Warming up: backbone frozen for first {self.warmup_epochs} epochs."
+                )
                 self.detection_model.model.backbone.freeze()
-            if epoch == 3:
+            if self.warmup_epochs > 0 and epoch == self.warmup_epochs:
                 logger.info(
                     "Unfreezing backbone with differential LR "
-                    f"(backbone={self.learning_rate * 0.1:.1e}, "
+                    f"(backbone={self.learning_rate * self.backbone_lr_mult:.1e}, "
                     f"head={self.learning_rate:.1e})."
                 )
                 self.detection_model.model.backbone.unfreeze()
-                # Reinitialise optimiser with differential LR so the pretrained
-                # backbone adapts gently while the head drives learning.
                 self.optimizer = get_optimizer_differential(
-                    self.detection_model.model, self.learning_rate
+                    self.detection_model.model,
+                    self.learning_rate,
+                    self.backbone_lr_mult,
+                    self.weight_decay,
                 )
                 # Reinitialise the scheduler to track the new optimiser for the
-                # remaining epochs (fixes a bug where the old scheduler kept
-                # stepping a detached optimiser).
+                # remaining epochs.
                 remaining = self.num_epochs - epoch
-                self.scheduler = get_lr_scheduler(self.optimizer, remaining)
+                self.scheduler = get_lr_scheduler(self.optimizer, remaining, self.cos_lr_min)
 
             train_loss = self.train_one_epoch()
             self.training_losses.append(train_loss)
