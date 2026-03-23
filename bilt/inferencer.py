@@ -45,12 +45,14 @@ class Inferencer:
         nms_threshold: float = 0.45,
         input_size: int = 512,
         device: Optional[torch.device] = None,
+        max_detections: int = 300,
     ):
         self.model = model
         self.class_names = class_names
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
+        self.max_detections = max_detections
         if device is not None:
             self.device = device
         elif torch.cuda.is_available():
@@ -143,6 +145,11 @@ class Inferencer:
         orig_w, orig_h = original_size
         scale_x = orig_w / self.input_size
         scale_y = orig_h / self.input_size
+
+        # Cap to max_detections keeping highest-scoring boxes
+        if len(scores) > self.max_detections:
+            top = scores.argsort(descending=True)[: self.max_detections]
+            boxes, scores, labels = boxes[top], scores[top], labels[top]
 
         detections: List[Dict[str, Any]] = []
         for box, score, label in zip(boxes, scores, labels):

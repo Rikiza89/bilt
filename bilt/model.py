@@ -105,6 +105,7 @@ class BILT:
         iou: float = 0.45,
         img_size: Optional[int] = None,
         return_images: bool = False,
+        max_det: int = 300,
     ) -> Union[List[Dict], "Results"]:
         """
         Run object detection on one or more images.
@@ -131,6 +132,7 @@ class BILT:
 
         self.inferencer.confidence_threshold = conf
         self.inferencer.nms_threshold = iou
+        self.inferencer.max_detections = max_det
         if img_size is not None:
             self.inferencer.input_size = img_size
 
@@ -244,16 +246,9 @@ class BILT:
             batch_size = 2
 
         # ------------------------------------------------------------------ #
-        # Read dataset class info                                             #
+        # Read dataset class info (label scan only — no images loaded)       #
         # ------------------------------------------------------------------ #
-        from .dataset import ObjectDetectionDataset, get_transforms
-
-        train_ds = ObjectDetectionDataset(
-            images_dir=dataset / "train" / "images",
-            labels_dir=dataset / "train" / "labels",
-            transforms=get_transforms(img_size or 512, training=True),
-            input_size=img_size or 512,
-        )
+        from .dataset import read_dataset_info
 
         yaml_path = dataset / "data.yaml"
         if not yaml_path.exists():
@@ -262,10 +257,10 @@ class BILT:
                     yaml_path = alt
                     break
 
-        class_names = train_ds.get_class_names(
-            yaml_path if yaml_path.exists() else None
+        num_classes, class_names = read_dataset_info(
+            labels_dir=dataset / "train" / "labels",
+            yaml_path=yaml_path if yaml_path.exists() else None,
         )
-        num_classes = train_ds.num_classes
         logger.info(f"Dataset: {num_classes} classes → {class_names}")
 
         # ------------------------------------------------------------------ #

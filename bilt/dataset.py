@@ -250,6 +250,55 @@ def get_transforms(input_size: int = 512, training: bool = True) -> T.Compose:
 
 
 # ---------------------------------------------------------------------------
+# Lightweight class-info reader (no image loading)
+# ---------------------------------------------------------------------------
+
+def read_dataset_info(
+    labels_dir: Path,
+    yaml_path: Optional[Path] = None,
+) -> Tuple[int, List[str]]:
+    """
+    Return ``(num_classes, class_names)`` by scanning label files only —
+    no images are loaded.  Used by ``BILT.train()`` to avoid creating a
+    full dataset object just to discover class metadata.
+
+    Parameters
+    ----------
+    labels_dir : Path  Directory containing ``.txt`` label files.
+    yaml_path  : Path  Optional ``data.yaml`` for human-readable names.
+
+    Returns
+    -------
+    (num_classes, class_names)
+    """
+    labels_dir = Path(labels_dir)
+    class_ids: set = set()
+    for lbl in labels_dir.glob("*.txt"):
+        try:
+            with open(lbl) as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        class_ids.add(int(parts[0]))
+        except Exception:
+            pass
+
+    sorted_ids = sorted(class_ids)
+    num_classes = len(sorted_ids)
+
+    if yaml_path and yaml_path.exists():
+        names = load_yaml_classes(yaml_path)
+        if names:
+            class_names = [
+                names[cid] if cid < len(names) else f"class_{cid}"
+                for cid in sorted_ids
+            ]
+            return num_classes, class_names
+
+    return num_classes, [f"class_{cid}" for cid in sorted_ids]
+
+
+# ---------------------------------------------------------------------------
 # Collation
 # ---------------------------------------------------------------------------
 
