@@ -4,17 +4,22 @@ BILT provides five model sizes. Each uses a **different backbone architecture**,
 so the trade-offs are not just about parameter count — they differ in feature
 quality, receptive field, and computational characteristics.
 
+All backbones are initialised with **ImageNet pretrained weights**, so every variant
+starts with strong visual features rather than random noise.
+
 ---
 
 ## Overview
 
-| Variant | Backbone | Input | Params (approx) | Best for |
-|---------|----------|-------|-----------------|----------|
-| `spark` | MobileNetV2 | 320 px | ~4 M | Embedded, real-time, Raspberry Pi |
-| `flash` | MobileNetV3-Small | 416 px | ~5 M | Edge devices, fast inference |
-| `core` | MobileNetV3-Large | 512 px | ~8 M | General purpose (default) |
-| `pro` | ResNet-50 | 640 px | ~30 M | High-accuracy production |
-| `max` | ResNet-101 | 640 px | ~50 M | Maximum accuracy |
+| Variant | Backbone | Input | Params (approx) | File size (fp16) | Best for |
+|---------|----------|-------|-----------------|------------------|----------|
+| `spark` | MobileNetV2 | 320 px | ~4 M | ~9 MB | Embedded, real-time, Raspberry Pi |
+| `flash` | MobileNetV3-Small | 416 px | ~5 M | ~13 MB | Edge devices, fast inference |
+| `core` | MobileNetV3-Large | 512 px | ~8 M | ~19 MB | General purpose (default) |
+| `pro` | ResNet-50 | 640 px | ~30 M | ~55 MB | High-accuracy production |
+| `max` | ResNet-101 | 640 px | ~50 M | ~95 MB | Maximum accuracy |
+
+File sizes shown are for saved checkpoints (weights stored in float16).
 
 ---
 
@@ -48,11 +53,11 @@ BILT("x")      == BILT("xlarge") == BILT("max")
 
 ```python
 model = BILT()                        # no variant yet
-model.train(dataset="data/", variant="pro", epochs=100)
+model.train(dataset="data/", variant="pro", epochs=50)
 
 # or
 model = BILT("pro")
-model.train(dataset="data/", epochs=100)
+model.train(dataset="data/", epochs=50)
 ```
 
 ---
@@ -63,10 +68,11 @@ model.train(dataset="data/", epochs=100)
 model = BILT("spark")
 ```
 
-**Backbone:** MobileNetV2
+**Backbone:** MobileNetV2 (ImageNet pretrained)
 **Input:** 320 × 320
 **FPN channels:** 64
 **Detection head convolutions:** 2
+**Checkpoint size:** ~9 MB
 
 MobileNetV2 uses inverted residual blocks with linear bottlenecks. It is
 extremely efficient on CPU and edge hardware.  Choose `spark` when:
@@ -82,7 +88,7 @@ Typical training command:
 model = BILT("spark")
 model.train(
     dataset="data/",
-    epochs=80,
+    epochs=50,
     batch_size=4,
     img_size=320,
 )
@@ -96,10 +102,11 @@ model.train(
 model = BILT("flash")
 ```
 
-**Backbone:** MobileNetV3-Small
+**Backbone:** MobileNetV3-Small (ImageNet pretrained)
 **Input:** 416 × 416
 **FPN channels:** 96
 **Detection head convolutions:** 3
+**Checkpoint size:** ~13 MB
 
 MobileNetV3-Small uses hardware-aware neural architecture search (NAS) and
 adds squeeze-and-excitation modules for improved accuracy at the same FLOP
@@ -111,7 +118,7 @@ budget. Choose `flash` when:
 
 ```python
 model = BILT("flash")
-model.train(dataset="data/", epochs=80, batch_size=4)
+model.train(dataset="data/", epochs=50, batch_size=4)
 ```
 
 ---
@@ -122,10 +129,11 @@ model.train(dataset="data/", epochs=80, batch_size=4)
 model = BILT("core")   # or simply BILT()  then train(variant="core")
 ```
 
-**Backbone:** MobileNetV3-Large
+**Backbone:** MobileNetV3-Large (ImageNet pretrained)
 **Input:** 512 × 512
 **FPN channels:** 128
 **Detection head convolutions:** 3
+**Checkpoint size:** ~19 MB
 
 MobileNetV3-Large is the recommended starting point for most projects. It
 provides a good balance of speed and accuracy, runs comfortably on a laptop
@@ -137,7 +145,7 @@ CPU, and converges reliably. Choose `core` when:
 
 ```python
 model = BILT("core")
-model.train(dataset="data/", epochs=100, batch_size=4)
+model.train(dataset="data/", epochs=50, batch_size=4)
 ```
 
 ---
@@ -148,10 +156,11 @@ model.train(dataset="data/", epochs=100, batch_size=4)
 model = BILT("pro")
 ```
 
-**Backbone:** ResNet-50
+**Backbone:** ResNet-50 (ImageNet pretrained)
 **Input:** 640 × 640
 **FPN channels:** 256
 **Detection head convolutions:** 4
+**Checkpoint size:** ~55 MB
 
 ResNet-50 offers substantially richer feature representations than MobileNet
 due to its greater depth and width. Choose `pro` when:
@@ -165,9 +174,8 @@ due to its greater depth and width. Choose `pro` when:
 model = BILT("pro")
 model.train(
     dataset="data/",
-    epochs=150,
+    epochs=50,
     batch_size=8,
-    learning_rate=3e-4,
     device="cuda",    # recommended
 )
 ```
@@ -180,10 +188,11 @@ model.train(
 model = BILT("max")
 ```
 
-**Backbone:** ResNet-101
+**Backbone:** ResNet-101 (ImageNet pretrained)
 **Input:** 640 × 640
 **FPN channels:** 256
 **Detection head convolutions:** 4
+**Checkpoint size:** ~95 MB
 
 ResNet-101 is the largest backbone available in BILT. The extra depth provides
 the most powerful feature extraction, at the cost of slower training and
@@ -197,9 +206,8 @@ inference. Choose `max` when:
 model = BILT("max")
 model.train(
     dataset="data/",
-    epochs=200,
+    epochs=100,
     batch_size=4,
-    learning_rate=2e-4,
     device="cuda",
 )
 ```
@@ -213,9 +221,10 @@ from bilt import get_variant_config, VARIANT_CONFIGS
 
 # Full configuration dict for a single variant
 cfg = get_variant_config("pro")
-print(cfg["backbone"])     # resnet50
-print(cfg["input_size"])   # 640
-print(cfg["fpn_channels"]) # 256
+print(cfg["backbone"])          # resnet50
+print(cfg["input_size"])        # 640
+print(cfg["fpn_channels"])      # 256
+print(cfg["anchor_scales"])     # (1.0, 1.26, 1.587)
 
 # Iterate over all variants
 for name, cfg in VARIANT_CONFIGS.items():
@@ -232,13 +241,16 @@ need to specify the variant again:
 
 ```python
 model = BILT("pro")
-model.train(dataset="data/", epochs=100)
+model.train(dataset="data/", epochs=50)
 model.save("my_pro_model.pth")
 
 # Later, on any machine:
 model2 = BILT("my_pro_model.pth")   # automatically uses ResNet-50 architecture
 print(model2.variant)               # pro
 ```
+
+Checkpoints are saved in **float16** to reduce file size. They are
+automatically upcast back to float32 on load.
 
 ---
 

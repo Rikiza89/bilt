@@ -12,7 +12,9 @@ Input image  (B, 3, H, W)  — normalised
        │
  ┌─────▼──────────────────────────────────────────────┐
  │  BILTBackbone                                       │
- │  Feature extractor (MobileNet / ResNet, random init)│
+ │  Feature extractor (MobileNet / ResNet)             │
+ │  All backbones initialised with ImageNet            │
+ │  pretrained weights for fast convergence            │
  │                                                     │
  │  C3 (stride 8,  ~H/8  × W/8 )                      │
  │  C4 (stride 16, ~H/16 × W/16)                      │
@@ -37,7 +39,7 @@ Input image  (B, 3, H, W)  — normalised
  │  Classification tower  →  (B, A·C, H, W)            │
  │  Regression tower      →  (B, A·4, H, W)            │
  │                                                     │
- │  A = anchors per location  (3 by default)           │
+ │  A = 9 anchors per location (3 scales × 3 ratios)  │
  │  C = num_classes                                    │
  └─────┬──────────────────────────────────────────────┘
        │
@@ -59,9 +61,9 @@ Input image  (B, 3, H, W)  — normalised
 `bilt/backbone.py`
 
 Wraps five torchvision backbone architectures to expose three multi-scale
-feature maps. All weights are randomly initialised and trained from scratch
-on the user's dataset. Each backbone is split at fixed layer boundaries to
-produce C3, C4, C5 at stride 8, 16, 32 respectively.
+feature maps. All backbones are **initialised with ImageNet pretrained weights**
+downloaded automatically from the torchvision model hub. Each backbone is split
+at fixed layer boundaries to produce C3, C4, C5 at stride 8, 16, 32 respectively.
 
 | Variant | Backbone | C3 ch | C4 ch | C5 ch |
 |---------|----------|-------|-------|-------|
@@ -71,9 +73,13 @@ produce C3, C4, C5 at stride 8, 16, 32 respectively.
 | pro | ResNet-50 | 512 | 1024 | 2048 |
 | max | ResNet-101 | 512 | 1024 | 2048 |
 
-**Head warmup:** The backbone is frozen for the first 5 training epochs
-so the randomly-initialised FPN and detection head can stabilise before
-full end-to-end training begins.
+**Head warmup:** The backbone is frozen for the first `warmup_epochs` training
+epochs (default 3) so the randomly-initialised FPN and detection head can
+stabilise before full end-to-end training begins.
+
+**Differential learning rate:** After warmup, the backbone trains at
+`learning_rate × backbone_lr_mult` (default 10× lower than the detection head),
+preserving the pretrained features while the head drives domain adaptation.
 
 ```python
 backbone.freeze()    # freeze all backbone parameters
@@ -144,16 +150,20 @@ loss trick from RetinaNet).
 ### AnchorGenerator
 
 Generates a grid of anchor boxes for each FPN level. Each spatial location
-gets `num_anchors` anchors (one per aspect ratio).
+gets `num_anchors` anchors — **3 octave scales × 3 aspect ratios = 9 per location**.
+
+The octave scales (1.0, 1.26, 1.587 — i.e. ×∛2 steps) ensure that every
+object size is covered by at least one anchor with IoU > 0.35, which is
+critical for getting positive matches on small or unusually-shaped objects.
 
 **Default configuration:**
 
-| FPN level | Stride | Base size | Aspect ratios |
-|-----------|--------|-----------|---------------|
-| P3 | 8 | 32 px | 0.5, 1.0, 2.0 |
-| P4 | 16 | 64 px | 0.5, 1.0, 2.0 |
-| P5 | 32 | 128 px | 0.5, 1.0, 2.0 |
-| P6 | 64 | 256 px | 0.5, 1.0, 2.0 |
+| FPN level | Stride | Base size | Scales | Aspect ratios | Anchors/location |
+|-----------|--------|-----------|--------|---------------|-----------------|
+| P3 | 8 | 32 px | 1.0, 1.26, 1.587 | 0.5, 1.0, 2.0 | 9 |
+| P4 | 16 | 64 px | 1.0, 1.26, 1.587 | 0.5, 1.0, 2.0 | 9 |
+| P5 | 32 | 128 px | 1.0, 1.26, 1.587 | 0.5, 1.0, 2.0 | 9 |
+| P6 | 64 | 256 px | 1.0, 1.26, 1.587 | 0.5, 1.0, 2.0 | 9 |
 
 Anchor centres are at the centre of each stride cell:
 `x = (col + 0.5) × stride`,  `y = (row + 0.5) × stride`.
@@ -162,22 +172,25 @@ For a 512 × 512 input:
 
 | Level | Grid size | Anchors |
 |-------|-----------|---------|
-| P3 | 64 × 64 | 64 × 64 × 3 = 12 288 |
-| P4 | 32 × 32 | 32 × 32 × 3 = 3 072 |
-| P5 | 16 × 16 | 16 × 16 × 3 = 768 |
-| P6 | 8 × 8 | 8 × 8 × 3 = 192 |
-| **Total** | | **16 320** |
+| P3 | 64 × 64 | 64 × 64 × 9 = 36 864 |
+| P4 | 32 × 32 | 32 × 32 × 9 = 9 216 |
+| P5 | 16 × 16 | 16 × 16 × 9 = 2 304 |
+| P6 | 8 × 8 | 8 × 8 × 9 = 576 |
+| **Total** | | **48 960** |
 
 ### AnchorMatcher
 
-Assigns ground-truth boxes to anchors based on pairwise IoU:
+Assigns ground-truth boxes to anchors based on pairwise IoU. Thresholds are
+tuned for **few-shot detection scenarios** where objects may be partially
+occluded or the dataset is small:
 
-- IoU ≥ 0.5 → **positive** (assigned the GT class)
-- IoU < 0.4 → **negative** (background, class 0)
-- 0.4 ≤ IoU < 0.5 → **ignore** (excluded from loss)
+- IoU ≥ **0.35** → **positive** (assigned the GT class)
+- IoU < **0.25** → **negative** (background, class 0)
+- 0.25 ≤ IoU < 0.35 → **ignore** (excluded from loss)
 
 Every GT box is additionally force-matched to its highest-IoU anchor,
-guaranteeing that every object contributes to the gradient.
+guaranteeing that every object contributes to the gradient even if no anchor
+meets the IoU threshold.
 
 ### Delta encoding
 
@@ -205,11 +218,12 @@ encoding is applied at inference time to recover absolute boxes.
 FL(p_t) = -α_t · (1 - p_t)^γ · log(p_t)
 ```
 
-- **α = 0.25** down-weights the contribution of well-classified negatives.
-- **γ = 2.0** makes the model focus on hard examples by reducing the loss
+- **α = 0.25** (default) down-weights the contribution of well-classified negatives.
+- **γ = 2.0** (default) makes the model focus on hard examples by reducing the loss
   contribution of easy ones.
 - Applied to all non-ignored anchors.
 - One-vs-all binary classification per class (no softmax).
+- Both `alpha` and `gamma` are fully configurable via `BILT.train()`.
 
 ### Smooth-L1 loss (regression)
 
@@ -235,10 +249,29 @@ At inference time:
 1. Apply sigmoid to classification logits → class probabilities.
 2. Decode box deltas → absolute `[x1, y1, x2, y2]` boxes (inverse of encoding).
 3. Clip boxes to image bounds.
-4. Filter: keep only boxes with max-class score > `score_threshold` (0.05 internal).
+4. Filter: keep only boxes with max-class score > `score_threshold` (0.01 internal).
 5. Per-class NMS with `nms_iou_threshold` (user-controlled via the `iou=` argument).
-6. Sort by score, keep top `max_detections` (300 by default).
+6. Sort by score, keep top `max_detections` (default 300, user-controlled via `max_det=`).
 7. Scale boxes from model-input space to original image space.
+8. Apply user-facing `conf` threshold — detections below this are dropped before returning.
+
+---
+
+## Data augmentation
+
+`bilt/dataset.py`
+
+Training images are augmented with two bbox-safe transforms:
+
+1. **Random horizontal flip** — probability `flip_prob` (default 0.5).
+   Box coordinates are mirrored: `x1_new = W - x2_old`, `x2_new = W - x1_old`.
+2. **Color jitter** — `torchvision.transforms.ColorJitter` with configurable
+   `(brightness, contrast, saturation, hue)` magnitudes. Does not affect boxes.
+
+Both transforms are applied **before** resizing and normalisation, so they
+operate in the original image space.
+
+Augmentation is disabled for validation images regardless of settings.
 
 ---
 
@@ -246,11 +279,35 @@ At inference time:
 
 All images are:
 1. Converted to RGB.
-2. Resized to the variant's `input_size × input_size` (nearest-neighbour for training, bilinear for inference via `T.Resize`).
-3. Converted to float tensor `[0, 1]`.
-4. Normalised: `(x - mean) / std`:
-   - mean = `[0.485, 0.456, 0.406]`
-   - std  = `[0.229, 0.224, 0.225]`
+2. Augmented (training only, see above).
+3. Resized to `input_size × input_size` via `torchvision.transforms.Resize`.
+4. Converted to float tensor `[0, 1]`.
+5. Normalised: `(x - mean) / std`:
+   - mean = `[0.485, 0.456, 0.406]`  (ImageNet statistics)
+   - std  = `[0.229, 0.224, 0.225]`  (ImageNet statistics)
+
+Using ImageNet normalisation statistics matches the pretrained backbone's
+expected input distribution.
+
+---
+
+## Checkpoint format
+
+Checkpoints are saved by `DetectionModel.save()` and `BILT.save()` as a
+Python dict with the following keys:
+
+| Key | Description |
+|-----|-------------|
+| `model_state_dict` | Model weights in **float16** (halves file size) |
+| `storage_dtype` | `"float16"` — signals the loader to upcast on read |
+| `num_classes` | Number of object categories |
+| `class_names` | List of human-readable class names |
+| `variant` | Variant name (e.g. `"core"`) |
+| `input_size` | Training resolution |
+| `class_id_mapping` | Mapping between raw dataset class IDs and model indices |
+| `architecture` | `"bilt_fpn"` |
+
+On load, float16 weights are upcast to float32 before `load_state_dict()`.
 
 ---
 
@@ -258,18 +315,19 @@ All images are:
 
 ```
 bilt/
-├── variants.py     Variant name → config dict
-├── backbone.py     BILTBackbone (wraps MobileNet/ResNet)
+├── variants.py     Variant name → config dict (including anchor_scales)
+├── backbone.py     BILTBackbone (wraps MobileNet/ResNet, ImageNet pretrained)
 ├── neck.py         FPNNeck (top-down FPN + P6)
 ├── head.py         BILTHead (cls tower + reg tower)
-├── anchors.py      AnchorGenerator, AnchorMatcher, encode/decode
-├── loss.py         BILTLoss (focal + smooth-L1)
+├── anchors.py      AnchorGenerator (9 anchors/location), AnchorMatcher, encode/decode
+├── loss.py         BILTLoss (focal + smooth-L1, configurable alpha/gamma/box_weight)
 ├── core.py         BILTDetector (assembles all of the above)
-│                   DetectionModel (save/load wrapper)
+│                   DetectionModel (save/load with fp16 storage)
 ├── model.py        BILT (high-level API)
-├── trainer.py      Trainer (training loop)
-├── inferencer.py   Inferencer (preprocessing + postprocessing)
-├── dataset.py      ObjectDetectionDataset, DataLoader factory
+├── trainer.py      Trainer (training loop, warmup, differential LR, augmentation)
+├── inferencer.py   Inferencer (preprocessing + postprocessing, max_detections cap)
+├── dataset.py      ObjectDetectionDataset (augmentation), DataLoader factory,
+│                   read_dataset_info (lightweight label scanner)
 ├── evaluator.py    Evaluator (basic detection statistics)
 └── utils.py        Logging, label parsing, NMS, drawing helpers
 ```

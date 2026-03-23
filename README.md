@@ -17,24 +17,26 @@ install a CUDA-enabled PyTorch build and BILT picks it up for both training and 
 
 - **Five model sizes** — *spark / flash / core / pro / max* — each with a different backbone so you can choose the right speed/accuracy trade-off
 - **Original architecture** — custom FPN neck + anchor-based detection head + focal loss; no dependency on proprietary detection code
-- **Five backbone architectures** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (via torchvision), all trained from scratch on your data
+- **Five backbone architectures** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (via torchvision), all **initialised with ImageNet pretrained weights** for rapid convergence even on tiny datasets
 - **Simple API** — `BILT("core")`, `.train()`, `.predict()`, `.evaluate()`, `.save()`, `.load()`
 - **GPU-first** — automatically uses CUDA when available; falls back to CPU seamlessly
 - **Pin-memory & non-blocking transfers** — DataLoader pins memory and tensor moves
   use `non_blocking=True` on CUDA, overlapping CPU→GPU transfer with the forward pass
 - **Edge-friendly** — works on laptops, Raspberry Pi, and any CPU-only device
+- **Compact checkpoints** — weights stored in float16, halving file size with no inference accuracy loss
+- **Full training control** — every hyperparameter (LR, augmentation, loss, warmup) is exposed and overridable
 
 ---
 
 ## Model Variants
 
-| Variant | Backbone | Input | FPN ch | Best for |
-|---------|----------|-------|--------|----------|
-| `spark` | MobileNetV2 | 320 px | 64 | Embedded / real-time |
-| `flash` | MobileNetV3-Small | 416 px | 96 | Edge / fast inference |
-| `core` | MobileNetV3-Large | 512 px | 128 | General use (default) |
-| `pro` | ResNet-50 | 640 px | 256 | High accuracy |
-| `max` | ResNet-101 | 640 px | 256 | Maximum accuracy |
+| Variant | Backbone | Input | FPN ch | File size (approx) | Best for |
+|---------|----------|-------|--------|--------------------|----------|
+| `spark` | MobileNetV2 | 320 px | 64 | ~9 MB | Embedded / real-time |
+| `flash` | MobileNetV3-Small | 416 px | 96 | ~13 MB | Edge / fast inference |
+| `core` | MobileNetV3-Large | 512 px | 128 | ~19 MB | General use (default) |
+| `pro` | ResNet-50 | 640 px | 256 | ~55 MB | High accuracy |
+| `max` | ResNet-101 | 640 px | 256 | ~95 MB | Maximum accuracy |
 
 Short aliases are supported: `n / s / m / l / x` and `nano / small / medium / large / xlarge`.
 
@@ -71,7 +73,7 @@ pip install -e .          # development install from source
 from bilt import BILT
 
 model = BILT("weights/best.pth")
-detections = model.predict("image.jpg", conf=0.25)
+detections = model.predict("image.jpg", conf=0.15)
 
 for det in detections:
     print(f"{det['class_name']}: {det['score']:.2f}  bbox={det['bbox']}")
@@ -80,6 +82,8 @@ for det in detections:
 ### Training from scratch
 
 BILT auto-detects CUDA — no `device=` argument needed on a GPU machine.
+All backbones start from **ImageNet pretrained weights**, so the model learns
+meaningful features even from a handful of annotated images.
 
 ```python
 from bilt import BILT
@@ -88,11 +92,25 @@ model = BILT("core")          # MobileNetV3-Large, 512 px
 
 metrics = model.train(
     dataset="datasets/my_dataset",
-    epochs=100,
-    batch_size=8,             # increase to 16–32 on a GPU
-    learning_rate=5e-4,
+    epochs=50,
+    batch_size=4,
+    learning_rate=2e-3,
 )
 print(metrics)
+```
+
+### Training with very few images
+
+BILT is designed to produce working detectors from as few as **2–5 annotated images**
+per class, thanks to pretrained backbones, augmentation, and tuned anchor matching.
+
+```python
+model = BILT("core")
+metrics = model.train(
+    dataset="datasets/my_dataset",
+    epochs=50,
+    batch_size=2,        # minimum for BatchNorm
+)
 ```
 
 ### Choosing a different size
@@ -113,7 +131,7 @@ model = BILT("x")       # same as max
 ### Batch prediction with annotated images
 
 ```python
-results = model.predict("images/", conf=0.3, return_images=True)
+results = model.predict("images/", conf=0.15, return_images=True)
 results.save("runs/detect/exp")   # saves annotated images
 results.show()                    # displays with matplotlib
 ```
@@ -137,7 +155,7 @@ need to pass `device="cuda"` anywhere.
 
 ```python
 model = BILT("core")
-model.train(dataset="data/", epochs=100)   # uses GPU if available
+model.train(dataset="data/", epochs=50)   # uses GPU if available
 ```
 
 To verify which device is active:
@@ -230,7 +248,7 @@ names: [cat, dog, person]
 Input image (H×W)
       │
   ┌───▼────────────────────────┐
-  │  BILTBackbone              │  MobileNet / ResNet (random init)
+  │  BILTBackbone              │  MobileNet / ResNet (ImageNet pretrained)
   │  C3 (1/8)  C4 (1/16)  C5 (1/32)
   └───┬────────────────────────┘
       │
@@ -241,13 +259,13 @@ Input image (H×W)
       │
   ┌───▼────────────────────────┐
   │  BILTHead  (original)      │  shared across all FPN levels
-  │  cls_preds  +  box_preds   │
+  │  cls_preds  +  box_preds   │  9 anchors/location (3 scales × 3 ratios)
   └───┬────────────────────────┘
       │
   ┌───▼────────────────────────┐    ┌──────────────────────────────┐
   │  Training                  │    │  Inference                   │
   │  Anchor matching           │    │  Box decode + per-class NMS  │
-  │  Focal loss + Smooth-L1    │    │  Score filter                │
+  │  Focal loss + Smooth-L1    │    │  Score filter + top-N cap    │
   └────────────────────────────┘    └──────────────────────────────┘
 ```
 
@@ -269,28 +287,41 @@ Input image (H×W)
 | `weights` | Variant name (`"spark"` … `"max"`), a `.pth` checkpoint path, or `None` |
 | `device`  | `"cpu"`, `"cuda"`, or `None` (auto) |
 
-### `.predict(source, conf, iou, img_size, return_images)`
+### `.predict(source, conf, iou, img_size, return_images, max_det)`
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `source` | — | File path, directory, PIL Image, numpy array, or list |
-| `conf` | `0.25` | Minimum confidence score |
+| `conf` | `0.15` | Minimum confidence score |
 | `iou` | `0.45` | NMS IoU threshold |
 | `img_size` | variant default | Override inference resolution |
 | `return_images` | `False` | Return `Results` with annotated images |
+| `max_det` | `300` | Maximum detections to return per image |
 
-### `.train(dataset, epochs, batch_size, img_size, learning_rate, ...)`
+### `.train(dataset, epochs, batch_size, ...)`
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `dataset` | — | Path to dataset root |
 | `epochs` | `50` | Training epochs |
-| `batch_size` | `4` | Images per batch |
+| `batch_size` | `4` | Images per batch (min 2) |
 | `img_size` | variant default | Training resolution |
-| `learning_rate` | `5e-4` | AdamW learning rate |
+| `learning_rate` | `2e-3` | AdamW learning rate for the detection head |
 | `variant` | `"core"` | Override model variant for this run |
 | `save_dir` | `"runs/train"` | Output directory |
 | `name` | `"exp"` | Run sub-directory name |
+| `workers` | `0` | DataLoader worker processes |
+| `warmup_epochs` | `3` | Epochs with backbone frozen |
+| `backbone_lr_mult` | `0.1` | Backbone LR = `learning_rate × backbone_lr_mult` |
+| `weight_decay` | `1e-4` | AdamW weight decay |
+| `cos_lr_min` | `1e-6` | Cosine annealing minimum LR |
+| `grad_clip` | `5.0` | Gradient clipping max-norm (0 = disabled) |
+| `focal_alpha` | `0.25` | Focal loss alpha |
+| `focal_gamma` | `2.0` | Focal loss gamma |
+| `box_loss_weight` | `1.0` | Regression loss weight |
+| `augment` | `True` | Enable training augmentation |
+| `flip_prob` | `0.5` | Random horizontal flip probability |
+| `color_jitter` | `(0.4,0.4,0.4,0.1)` | Brightness/contrast/saturation/hue jitter |
 
 ### `.evaluate(dataset, batch_size, conf)`
 
@@ -299,8 +330,9 @@ Returns a dict with `total_images`, `total_predictions`, `total_ground_truth`,
 
 ### `.save(path)` / `.load(weights)`
 
-Checkpoints include the variant name, class names, input size and full model
-state so a single file is sufficient to restore a complete model.
+Checkpoints are stored in **float16** to halve disk usage. They are transparently
+upcast back to float32 when loaded. The variant name, class names, and input size
+are all included so a single file is sufficient to restore a complete model.
 
 ### `BILT.variants()`
 
@@ -316,7 +348,7 @@ BILT is an original work by **Rikiza89**, released under the
 - The detection architecture (FPN neck, detection head, anchor matching,
   focal loss, smooth-L1) is written from scratch and is not derived from any
   other project.
-- Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); all weights are trained from scratch on the user's dataset.
+- Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); weights are downloaded from torchvision's pretrained model hub (ImageNet) at first use.
 - No code from any other AGPL-encumbered project is incorporated.
 
 See [LICENSE](LICENSE) for the full license text.
@@ -326,7 +358,6 @@ See [LICENSE](LICENSE) for the full license text.
 ## Roadmap
 
 - [ ] mAP evaluation (COCO-style)
-- [ ] Data augmentation pipeline (mosaic, flips, colour jitter)
 - [ ] ONNX and TensorRT export
 - [ ] Mixed-precision (fp16) training
 - [ ] Multi-GPU training

@@ -12,6 +12,7 @@ model = BILT("runs/train/exp/weights/best.pth")
 
 The checkpoint stores the variant name, class names, and input resolution.
 Everything is restored automatically — no need to pass extra arguments.
+Float16-stored weights are transparently upcast to float32 on load.
 
 ### Checking what was loaded
 
@@ -110,18 +111,19 @@ rescales them back from the model's input resolution for you.
 Controls the minimum score a detection must have to be returned.
 
 ```python
-# More detections (lower bar — may include false positives)
-detections = model.predict("photo.jpg", conf=0.1)
+# Default — recommended starting point
+detections = model.predict("photo.jpg", conf=0.15)
 
-# Default
-detections = model.predict("photo.jpg", conf=0.25)
+# More detections (lower bar — may include false positives)
+detections = model.predict("photo.jpg", conf=0.05)
 
 # High precision (fewer detections, less noise)
-detections = model.predict("photo.jpg", conf=0.7)
+detections = model.predict("photo.jpg", conf=0.5)
 ```
 
-A good starting point is `conf=0.25`. Increase to 0.5–0.7 for precision-
-critical applications; decrease to 0.1 for recall-critical ones.
+The default `conf=0.15` is tuned for use with pretrained + fine-tuned models.
+Raise it to 0.4–0.7 for precision-critical applications; lower it to 0.05–0.10
+for recall-critical ones (e.g., safety systems where missing objects is costly).
 
 ---
 
@@ -138,6 +140,21 @@ detections = model.predict("photo.jpg", iou=0.45)
 
 # Relaxed NMS — allows more overlap (useful for dense scenes)
 detections = model.predict("photo.jpg", iou=0.6)
+```
+
+---
+
+## Limiting detections per image
+
+Use `max_det` to cap the maximum number of detections returned per image.
+Detections are ranked by confidence and the top-N are kept.
+
+```python
+# Default: keep up to 300 detections
+detections = model.predict("photo.jpg", max_det=300)
+
+# Tight cap — only the top 10 most confident detections
+detections = model.predict("photo.jpg", max_det=10)
 ```
 
 ---
@@ -163,7 +180,7 @@ Set `return_images=True` to get a `Results` object that bundles detections
 with annotated images.
 
 ```python
-results = model.predict("images/", conf=0.3, return_images=True)
+results = model.predict("images/", conf=0.15, return_images=True)
 
 # Save annotated images to disk
 results.save("runs/detect/exp")
@@ -198,7 +215,7 @@ from pathlib import Path
 img_paths = sorted(Path("images/").glob("*.jpg"))
 
 # Process all at once
-all_dets = model.predict(list(img_paths), conf=0.3)
+all_dets = model.predict(list(img_paths), conf=0.15)
 
 for path, dets in zip(img_paths, all_dets):
     print(f"{path.name}: {len(dets)} objects")
@@ -213,10 +230,11 @@ from PIL import Image
 inf = Inferencer(
     model=model.model,
     class_names=model.names,
-    confidence_threshold=0.25,
+    confidence_threshold=0.15,
     nms_threshold=0.45,
     input_size=512,
     device=model.device,
+    max_detections=300,
 )
 
 images = [Image.open(p) for p in img_paths]
@@ -252,7 +270,7 @@ model = BILT("weights/best.pth", device="mps")       # Apple Silicon
 ### Filter by class
 
 ```python
-detections = model.predict("photo.jpg", conf=0.25)
+detections = model.predict("photo.jpg", conf=0.15)
 
 cats = [d for d in detections if d["class_name"] == "cat"]
 dogs = [d for d in detections if d["class_name"] == "dog"]
@@ -291,16 +309,18 @@ annotated.show()
 
 ### No detections returned
 
-1. **Confidence too high** — try `conf=0.1` to see if the model is detecting
-   anything at all.
+1. **Confidence too high** — try `conf=0.05` to see if the model is detecting
+   anything at all. The default is already `0.15`, which is conservative.
 2. **Wrong input resolution** — the model was trained at a specific size. Try
    specifying `img_size` to match training.
 3. **Model not trained on these classes** — check `model.names`.
+4. **Model not converged** — if trained on very few epochs, try longer training.
 
 ### Too many false positives
 
-1. **Confidence too low** — increase to `conf=0.5` or higher.
+1. **Confidence too low** — increase to `conf=0.4` or higher.
 2. **NMS too relaxed** — decrease `iou=0.3`.
+3. **Too many detections** — set `max_det=10` to cap at the top-N most confident.
 
 ### Detections look correct but boxes are off-position
 

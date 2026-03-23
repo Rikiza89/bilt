@@ -49,6 +49,14 @@ pip install matplotlib
 
 ---
 
+## First-run note
+
+On the first `model.train()` call, torchvision will download ImageNet pretrained
+weights for the backbone (~10–130 MB depending on variant). These are cached by
+torchvision and only downloaded once.
+
+---
+
 ## Platform notes
 
 ### CPU (any platform)

@@ -199,6 +199,35 @@ stored in the checkpoint so inference uses the same mapping.
 
 ---
 
+## Training augmentation
+
+BILT applies the following augmentation to training images automatically:
+
+| Transform | Default | Description |
+|-----------|---------|-------------|
+| Random horizontal flip | prob=0.5 | Mirrors image + corrects box coords |
+| Color jitter | (0.4, 0.4, 0.4, 0.1) | Brightness, contrast, saturation, hue |
+
+Validation images are **never augmented**.
+
+To customise or disable augmentation:
+
+```python
+# Disable all augmentation
+model.train(dataset="data/", augment=False)
+
+# Custom flip probability
+model.train(dataset="data/", flip_prob=0.3)
+
+# Disable color jitter only
+model.train(dataset="data/", color_jitter=None)
+
+# Stronger jitter for small datasets
+model.train(dataset="data/", color_jitter=(0.6, 0.6, 0.6, 0.15))
+```
+
+---
+
 ## Large datasets
 
 For datasets with many images, increase the `workers` argument to speed up
@@ -212,12 +241,20 @@ model.train(dataset="data/", workers=4)
 
 ## Minimum dataset size
 
-BILT has no hard minimum, but very small datasets (< 50 images) will likely
-overfit. Recommendations:
+BILT is specifically designed to work with **very small datasets**, including
+as few as 2 training images, thanks to ImageNet pretrained backbones and
+data augmentation. The model can still learn meaningful detectors even from
+minimal data.
 
-- Minimum per class: **50 images** for simple, clear objects.
-- Good baseline: **200–500 images per class**.
-- For hard cases (occlusion, clutter, scale variation): **1000+ per class**.
+General guidance:
+
+| Images per class | Expectation |
+|-----------------|-------------|
+| 2–5 | Works; model may be noisy — use `conf=0.05` to see detections |
+| 10–50 | Good results with 50+ epochs |
+| 50–200 | Solid detector; most use cases covered |
+| 200–500 | High-quality results; try `pro` or `max` |
+| 500+ | Excellent results; increase batch size and epochs |
 
 ---
 
@@ -227,3 +264,10 @@ If some classes have far more examples than others, the focal loss used by
 BILT already helps mitigate this. However, for extreme imbalance (e.g., 10:1
 ratio), consider oversampling the minority class by duplicating images and
 labels into the `train/` directory.
+
+You can also tune the focal loss `alpha` parameter:
+
+```python
+# Down-weight easy majority class examples more aggressively
+model.train(dataset="data/", focal_alpha=0.5)
+```

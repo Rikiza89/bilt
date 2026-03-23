@@ -25,7 +25,7 @@ model = BILT(weights=None, device=None)
 
 ```python
 BILT()                          # uninitialized, default device
-BILT("core")                    # medium variant, no weights yet
+BILT("core")                    # medium variant, ImageNet pretrained backbone
 BILT("m")                       # same as above (alias)
 BILT("runs/train/exp/best.pth") # load saved model
 BILT("best.pth", device="cuda") # load on GPU
@@ -38,19 +38,41 @@ BILT("best.pth", device="cuda") # load on GPU
 ```python
 metrics = model.train(
     dataset,
-    epochs=50,
-    batch_size=4,
-    img_size=None,
-    learning_rate=5e-4,
-    device=None,
-    save_dir="runs/train",
-    name="exp",
-    variant=None,
-    workers=0,
+
+    # Basic
+    epochs         = 50,
+    batch_size     = 4,
+    img_size       = None,
+    learning_rate  = 2e-3,
+    device         = None,
+    save_dir       = "runs/train",
+    name           = "exp",
+    variant        = None,
+    workers        = 0,
+
+    # Training loop
+    warmup_epochs    = 3,
+    backbone_lr_mult = 0.1,
+    weight_decay     = 1e-4,
+    cos_lr_min       = 1e-6,
+    grad_clip        = 5.0,
+
+    # Loss
+    focal_alpha      = 0.25,
+    focal_gamma      = 2.0,
+    box_loss_weight  = 1.0,
+
+    # Augmentation
+    augment          = True,
+    flip_prob        = 0.5,
+    color_jitter     = (0.4, 0.4, 0.4, 0.1),
 )
 ```
 
-Train a new detector from scratch on the user's dataset.
+Train a detector on the user's dataset. The backbone starts from ImageNet
+pretrained weights. The backbone is frozen for `warmup_epochs` epochs so the
+head can stabilise; after warmup, the backbone is unfrozen and trained at
+`learning_rate × backbone_lr_mult`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -58,12 +80,23 @@ Train a new detector from scratch on the user's dataset.
 | `epochs` | int | `50` | Total training epochs |
 | `batch_size` | int | `4` | Images per batch (minimum 2) |
 | `img_size` | int \| None | `None` | Square input resolution; `None` uses the variant's default |
-| `learning_rate` | float | `5e-4` | Initial AdamW learning rate |
+| `learning_rate` | float | `2e-3` | Initial AdamW learning rate for the detection head |
 | `device` | str \| None | `None` | Override device for this run |
 | `save_dir` | str \| Path | `"runs/train"` | Parent directory for outputs |
 | `name` | str | `"exp"` | Sub-directory name (auto-incremented if it already exists) |
 | `variant` | str \| None | `None` | Override the variant name for this run |
 | `workers` | int | `0` | DataLoader worker processes |
+| `warmup_epochs` | int | `3` | Epochs to keep backbone frozen (0 = no warmup) |
+| `backbone_lr_mult` | float | `0.1` | Backbone LR multiplier relative to head LR |
+| `weight_decay` | float | `1e-4` | AdamW weight decay |
+| `cos_lr_min` | float | `1e-6` | Cosine annealing minimum learning rate |
+| `grad_clip` | float | `5.0` | Gradient clipping max-norm (0 = disabled) |
+| `focal_alpha` | float | `0.25` | Focal loss alpha (class-balance weight) |
+| `focal_gamma` | float | `2.0` | Focal loss gamma (focusing strength) |
+| `box_loss_weight` | float | `1.0` | Regression loss weight relative to classification |
+| `augment` | bool | `True` | Enable training augmentation |
+| `flip_prob` | float | `0.5` | Random horizontal flip probability (0–1) |
+| `color_jitter` | tuple \| None | `(0.4, 0.4, 0.4, 0.1)` | (brightness, contrast, saturation, hue) jitter, or `None` to disable |
 
 **Returns:** dict with keys:
 
@@ -84,10 +117,11 @@ Train a new detector from scratch on the user's dataset.
 ```python
 result = model.predict(
     source,
-    conf=0.25,
+    conf=0.15,
     iou=0.45,
     img_size=None,
     return_images=False,
+    max_det=300,
 )
 ```
 
@@ -96,10 +130,11 @@ Run object detection on one or more images.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `source` | str \| Path \| PIL.Image \| np.ndarray \| list | **required** | Input image(s) |
-| `conf` | float | `0.25` | Minimum confidence threshold in [0, 1] |
+| `conf` | float | `0.15` | Minimum confidence threshold in [0, 1] |
 | `iou` | float | `0.45` | NMS IoU threshold in [0, 1] |
 | `img_size` | int \| None | `None` | Override inference resolution |
 | `return_images` | bool | `False` | Return a `Results` object with annotated images |
+| `max_det` | int | `300` | Maximum detections to return per image |
 
 **Returns:**
 
@@ -162,8 +197,9 @@ Save the model checkpoint (weights + metadata) to `path`.
 |-----------|------|-------------|
 | `path` | str \| Path | Output file path (`.pth` extension recommended) |
 
-The checkpoint stores: model weights, class names, variant name, and
-input size. Everything needed to restore the model is included.
+Weights are stored in **float16** to halve the file size. When the checkpoint
+is loaded again via `.load()`, weights are transparently upcast back to float32.
+The checkpoint also stores: class names, variant name, input size.
 
 ---
 
@@ -173,11 +209,14 @@ input size. Everything needed to restore the model is included.
 model = model.load(weights)
 ```
 
-Load a checkpoint. Returns `self` for method chaining.
+Load a checkpoint produced by `.save()` or by training. Returns `self` for
+method chaining.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `weights` | str \| Path | Path to a `.pth` checkpoint |
+
+Float16-stored checkpoints are automatically upcast to float32 on load.
 
 ---
 
@@ -256,6 +295,7 @@ Returns a copy of the configuration dict for the given variant name or alias.
 | `fpn_channels` | int | FPN output channel width |
 | `head_num_convs` | int | Convolutional layers in detection head |
 | `anchor_sizes` | list | Anchor base sizes per FPN level |
+| `anchor_scales` | tuple | Octave scale multipliers (3 scales → 9 anchors/location) |
 | `anchor_aspect_ratios` | tuple | Aspect ratios per anchor |
 | `description` | str | Human-readable variant description |
 
@@ -312,6 +352,8 @@ returns a list of detection dicts.
 Convenience wrapper around `BILTDetector` with `save()`, `load()`, `to()`,
 `train()`, and `eval()` helpers. Used internally by `Trainer`.
 
+Checkpoints are saved in float16 and loaded back as float32 automatically.
+
 ### `bilt.trainer.Trainer`
 
 ```python
@@ -322,11 +364,22 @@ trainer = Trainer(
     num_classes=3,
     class_names=["cat", "dog", "person"],
     batch_size=8,
-    learning_rate=3e-4,
-    num_epochs=100,
-    input_size=640,
+    learning_rate=2e-3,
+    num_epochs=50,
+    input_size=512,
     device="cuda",
-    variant="pro",
+    variant="core",
+    warmup_epochs=3,
+    backbone_lr_mult=0.1,
+    weight_decay=1e-4,
+    cos_lr_min=1e-6,
+    grad_clip=5.0,
+    focal_alpha=0.25,
+    focal_gamma=2.0,
+    box_loss_weight=1.0,
+    augment=True,
+    flip_prob=0.5,
+    color_jitter=(0.4, 0.4, 0.4, 0.1),
 )
 metrics = trainer.train(save_path="weights/best.pth", callback=fn)
 ```
@@ -341,10 +394,11 @@ from bilt.inferencer import Inferencer
 inf = Inferencer(
     model=detector,          # BILTDetector in eval mode
     class_names=["cat"],
-    confidence_threshold=0.25,
+    confidence_threshold=0.15,
     nms_threshold=0.45,
     input_size=512,
     device="cpu",
+    max_detections=300,
 )
 dets = inf.detect(pil_image)
 dets = inf.detect_batch([img1, img2])
@@ -361,10 +415,29 @@ ds = ObjectDetectionDataset(
     labels_dir="data/train/labels",
     transforms=get_transforms(512, training=True),
     input_size=512,
+    training=True,
+    augment=True,
+    flip_prob=0.5,
+    color_jitter=(0.4, 0.4, 0.4, 0.1),
 )
 img_tensor, target = ds[0]
 # target = {"boxes": Tensor(N,4), "labels": Tensor(N,)}
 ```
+
+### `bilt.dataset.read_dataset_info()`
+
+```python
+from bilt.dataset import read_dataset_info
+from pathlib import Path
+
+num_classes, class_names = read_dataset_info(
+    labels_dir=Path("data/train/labels"),
+    yaml_path=Path("data/data.yaml"),   # optional
+)
+```
+
+Lightweight class-info reader that scans only label `.txt` files — no images
+are loaded. Used internally by `BILT.train()`.
 
 ### `bilt.anchors` module
 
@@ -377,6 +450,11 @@ from bilt.anchors import (
     box_iou,          # pairwise IoU matrix
 )
 ```
+
+`AnchorGenerator` uses 3 octave scales × 3 aspect ratios = **9 anchors per
+location** by default (scales: 1.0, 1.26, 1.587).
+
+`AnchorMatcher` thresholds: positive IoU ≥ 0.35, negative IoU < 0.25.
 
 ### `bilt.loss.BILTLoss`
 

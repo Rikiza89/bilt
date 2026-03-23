@@ -10,7 +10,7 @@ from bilt import BILT
 model = BILT("core")          # choose a variant
 metrics = model.train(
     dataset="datasets/my_dataset",
-    epochs=100,
+    epochs=50,
     batch_size=4,
 )
 ```
@@ -18,11 +18,14 @@ metrics = model.train(
 BILT automatically:
 - Loads train and validation splits from `dataset/train/` and `dataset/val/`.
 - Reads class names from `data.yaml` if present.
-- Initialises the detector with randomly initialised weights — training from scratch on your data.
+- Initialises the detector with **ImageNet pretrained backbone weights** — feature extraction starts from a strong base rather than random noise.
 - **Selects the best available device** — CUDA GPU if present, otherwise CPU.
 - Enables `pin_memory` and `non_blocking` transfers when on CUDA.
-- Freezes the backbone for the first 5 epochs (warmup), then unfreezes it.
+- Freezes the backbone for the first `warmup_epochs` (default: 3) so the detection head stabilises before full end-to-end training.
+- After warmup, unfreezes the backbone with **differential learning rate** — backbone trains at `learning_rate × backbone_lr_mult` (default 10× lower than the head).
+- Applies **data augmentation** (random horizontal flip + color jitter) to training images.
 - Saves the best checkpoint (lowest validation loss) to `runs/train/exp/weights/best.pth`.
+- Saves checkpoints in **float16** — roughly half the file size of float32 with no accuracy loss.
 
 ---
 
@@ -30,16 +33,36 @@ BILT automatically:
 
 ```python
 model.train(
+    # Required
     dataset        = "datasets/my_dataset",
-    epochs         = 100,
+
+    # Basic
+    epochs         = 50,
     batch_size     = 4,
     img_size       = None,          # None = use variant default
-    learning_rate  = 5e-4,
+    learning_rate  = 2e-3,
     device         = None,          # None = auto (cuda if available, else cpu)
     save_dir       = "runs/train",  # parent directory for run outputs
     name           = "exp",         # sub-directory name (auto-incremented)
     variant        = None,          # override the variant for this run
     workers        = 0,             # dataloader worker processes
+
+    # Training loop
+    warmup_epochs    = 3,           # epochs with backbone frozen
+    backbone_lr_mult = 0.1,         # backbone LR = learning_rate * backbone_lr_mult
+    weight_decay     = 1e-4,        # AdamW weight decay
+    cos_lr_min       = 1e-6,        # cosine annealing minimum LR
+    grad_clip        = 5.0,         # gradient clipping max-norm (0 = disabled)
+
+    # Loss
+    focal_alpha      = 0.25,        # focal loss class-balance weight
+    focal_gamma      = 2.0,         # focal loss focusing strength
+    box_loss_weight  = 1.0,         # regression loss weight
+
+    # Augmentation
+    augment          = True,        # enable/disable training augmentation
+    flip_prob        = 0.5,         # random horizontal flip probability
+    color_jitter     = (0.4, 0.4, 0.4, 0.1),  # (brightness, contrast, saturation, hue)
 )
 ```
 
@@ -50,11 +73,11 @@ model.train(
 ```python
 {
     "variant":          "core",
-    "num_epochs":       100,
-    "final_train_loss": 0.3412,
-    "final_val_loss":   0.3891,
-    "best_val_loss":    0.3764,
-    "training_time":    4823.1,     # seconds
+    "num_epochs":       50,
+    "final_train_loss": 0.0612,
+    "final_val_loss":   0.0731,
+    "best_val_loss":    0.0473,
+    "training_time":    423.1,      # seconds
     "model_path":       "runs/train/exp/weights/best.pth",
 }
 ```
@@ -77,21 +100,44 @@ automatically clamps it to 2 if a lower value is passed.
 
 ### Learning rate
 
-The default `5e-4` works well for most cases with AdamW. If training is
-unstable (loss spikes), try `2e-4`. If convergence is too slow, try `1e-3`.
+The default `2e-3` works well with the pretrained backbone + warmup strategy.
+This is the learning rate applied to the **detection head**; the backbone gets
+`learning_rate × backbone_lr_mult` (default `2e-4`).
 
 ```python
-model.train(dataset="data/", learning_rate=2e-4)
+# Default — recommended starting point
+model.train(dataset="data/", learning_rate=2e-3)
+
+# More conservative — use if training is unstable
+model.train(dataset="data/", learning_rate=5e-4)
+
+# Adjust backbone learning relative to head (default 10×)
+model.train(dataset="data/", learning_rate=2e-3, backbone_lr_mult=0.05)
 ```
 
 ### Epochs
 
 | Dataset size | Recommended epochs |
 |-------------|-------------------|
-| < 500 images | 50–80 |
+| < 10 images | 50–100 |
+| 10–100 images | 50–100 |
+| 100–500 images | 50–80 |
 | 500–2000 images | 80–150 |
-| 2000–10000 images | 100–200 |
-| > 10000 images | 50–100 (large datasets converge faster) |
+| > 2000 images | 50–100 (large datasets converge faster) |
+
+### Warmup epochs
+
+The backbone starts frozen for `warmup_epochs` (default 3). This lets the
+randomly-initialised detection head stabilise before the pretrained backbone
+starts adapting. After warmup, the backbone unfreezes and trains with a lower LR.
+
+```python
+# Longer warmup — more stable but slower to adapt
+model.train(dataset="data/", warmup_epochs=5)
+
+# Skip warmup — backbone trains from epoch 0 at reduced LR
+model.train(dataset="data/", warmup_epochs=0)
+```
 
 ### Image size
 
@@ -105,6 +151,36 @@ model.train(dataset="data/", img_size=640)
 ```
 
 Image size must be divisible by 32. Common choices: 320, 416, 512, 640.
+
+---
+
+## Augmentation
+
+Training augmentation is **enabled by default** and consists of:
+
+1. **Random horizontal flip** — mirrors the image and corrects box coordinates.
+   Controlled by `flip_prob` (default 0.5).
+2. **Color jitter** — randomly varies brightness, contrast, saturation, and hue.
+   Controlled by `color_jitter=(brightness, contrast, saturation, hue)`.
+
+```python
+# Default augmentation
+model.train(dataset="data/", augment=True, flip_prob=0.5,
+            color_jitter=(0.4, 0.4, 0.4, 0.1))
+
+# Disable color jitter only
+model.train(dataset="data/", color_jitter=None)
+
+# Disable all augmentation
+model.train(dataset="data/", augment=False)
+
+# Stronger augmentation for small datasets
+model.train(dataset="data/", flip_prob=0.5,
+            color_jitter=(0.6, 0.6, 0.6, 0.15))
+```
+
+Augmentation is automatically disabled for the validation split regardless of
+the `augment` setting.
 
 ---
 
@@ -157,7 +233,7 @@ runs/
 └── train/
     ├── exp/                     ← first run
     │   └── weights/
-    │       └── best.pth         ← best checkpoint (lowest val loss)
+    │       └── best.pth         ← best checkpoint (lowest val loss, float16)
     ├── exp1/                    ← second run (auto-incremented)
     │   └── weights/
     │       └── best.pth
@@ -260,25 +336,42 @@ print(f"\nBest variant: {best}")
 
 ---
 
-## Training on a small dataset (fine-tuning tips)
+## Training on a small dataset
 
-When you have fewer than 200 images:
+BILT is specifically designed to produce working detectors from **very few images**,
+including as few as 2–5 images per class. The following features make this possible:
 
-1. **Use `spark` or `flash`** — fewer parameters, less overfitting.
-2. **Freeze the backbone longer** — you can do this by modifying the warmup
-   in `Trainer` (default: 5 epochs, increase to 15–20).
-3. **Use a lower learning rate** — try `1e-4` or `5e-5`.
-4. **More epochs** — small datasets may need 200+ epochs.
+- **ImageNet pretrained backbones** — the model already understands visual features
+- **Augmentation** — flip and color jitter multiply effective training data
+- **9 anchors per location** (3 octave scales × 3 aspect ratios) — covers a wide range of object sizes
+- **Lowered anchor matching thresholds** — IoU ≥ 0.35 for positive matches (industry default is 0.5)
+- **Higher default LR** (2e-3) — faster convergence on small datasets
+- **Backbone warmup** — head stabilises before pretrained features are touched
+
+Practical recommendations for small datasets:
+
+1. **Use `core` or smaller** — fewer parameters, less overfitting risk.
+2. **Use default warmup** (`warmup_epochs=3`) or increase to 5–10 for very small sets.
+3. **Do not decrease LR** — 2e-3 is already tuned for few-shot scenarios.
+4. **Run enough epochs** — 50 is a good default; go up to 100–200 if validation loss
+   is still improving.
 
 ```python
-model = BILT("flash")
+model = BILT("core")
 model.train(
     dataset="data/",
-    epochs=200,
-    learning_rate=1e-4,
+    epochs=100,
     batch_size=2,
+    warmup_epochs=5,
 )
 ```
+
+Healthy loss values (epoch 30–50 with pretrained backbone):
+
+| Metric | Target range |
+|--------|-------------|
+| train_loss | 0.03 – 0.10 |
+| val_loss | 0.04 – 0.12 |
 
 ---
 
@@ -287,7 +380,7 @@ model.train(
 The training log prints three loss values each batch:
 
 ```
-Epoch 3/100  batch 12/48  loss=1.2341  cls=0.8102  box=0.4239
+Epoch 3/50  batch 0/1  loss=0.0432  cls=0.0214  box=0.0218
 ```
 
 | Component | Description |
@@ -298,12 +391,6 @@ Epoch 3/100  batch 12/48  loss=1.2341  cls=0.8102  box=0.4239
 
 Both losses are normalised by the number of positive anchors so the scale
 remains roughly constant regardless of batch size.
-
-Typical healthy values:
-- `cls` should decrease from ~1.5–2.0 to < 0.5 over training.
-- `box` should decrease from ~0.5–1.0 to < 0.3.
-- If `box` is near zero but `cls` is stuck high, the model is not finding
-  any positive anchor matches — check your label files.
 
 ---
 
@@ -320,11 +407,22 @@ trainer = Trainer(
     num_classes=3,
     class_names=["cat", "dog", "person"],
     batch_size=8,
-    learning_rate=3e-4,
-    num_epochs=150,
-    input_size=640,
+    learning_rate=2e-3,
+    num_epochs=50,
+    input_size=512,
     device="cuda",
-    variant="pro",
+    variant="core",
+    warmup_epochs=3,
+    backbone_lr_mult=0.1,
+    weight_decay=1e-4,
+    cos_lr_min=1e-6,
+    grad_clip=5.0,
+    focal_alpha=0.25,
+    focal_gamma=2.0,
+    box_loss_weight=1.0,
+    augment=True,
+    flip_prob=0.5,
+    color_jitter=(0.4, 0.4, 0.4, 0.1),
 )
 
 # Train one epoch at a time
