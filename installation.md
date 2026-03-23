@@ -1,7 +1,21 @@
-# Install
-pip install -e .
+# Installation
 
-# Basic usage
+See **[docs/installation.md](docs/installation.md)** for the full installation guide.
+
+## Quick install
+
+```bash
+git clone https://github.com/Rikiza89/bilt.git
+cd bilt
+pip install -e .
+```
+
+## Verify
+
+```python
+import bilt
+print(bilt.__version__)   # 0.2.0
+
 from bilt import BILT
-model = BILT("weights.pth")
-results = model.predict("test.jpg")
+BILT.variants()
+```

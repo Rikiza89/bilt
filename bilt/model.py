@@ -1,267 +1,284 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2026 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
-import torch
-import torch.nn as nn
+"""
+BILT – main high-level API.
+
+Usage
+-----
+    from bilt import BILT
+
+    # Create or load a model by variant name
+    model = BILT("core")           # MobileNetV3-Large, 512 px
+    model = BILT("spark")          # MobileNetV2, 320 px (fastest)
+    model = BILT("pro")            # ResNet-50, 640 px
+
+    # Load a previously saved model
+    model = BILT("weights/best.pth")
+
+    # Train
+    metrics = model.train(dataset="datasets/my_data", epochs=50)
+
+    # Infer
+    results = model.predict("image.jpg", conf=0.25)
+
+    # Evaluate
+    metrics = model.evaluate("datasets/my_data")
+
+    # Save
+    model.save("runs/exp/weights/best.pth")
+"""
+
 from pathlib import Path
-from typing import Union, List, Dict, Any, Optional
-from PIL import Image
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
+import torch
+from PIL import Image
 
 from .core import DetectionModel
-from .trainer import Trainer
-from .inferencer import Inferencer
 from .evaluator import Evaluator
+from .inferencer import Inferencer
+from .trainer import Trainer
 from .utils import get_logger
+from .variants import DEFAULT_VARIANT, is_variant_name, list_variants
 
 logger = get_logger(__name__)
 
 
 class BILT:
     """
-    BILT (Because I Like Twice) - Main interface for object detection.
-    
-    Examples:
-        # Load pretrained model
-        >>> model = BILT("weights.pth")
-        
-        # Predict on image
-        >>> results = model.predict("image.jpg", conf=0.25)
-        
-        # Train new model
-        >>> model = BILT()
-        >>> model.train(dataset="datasets/my_dataset", epochs=50)
-        
-        # Evaluate model
-        >>> metrics = model.evaluate("datasets/val")
+    BILT (Because I Like Twice) — object detection library.
+
+    Parameters
+    ----------
+    weights : str or Path, optional
+        Either:
+        - A variant name: ``"spark"``, ``"flash"``, ``"core"``, ``"pro"``,
+          ``"max"`` (and short aliases ``n/s/m/l/x``).
+        - A path to a ``.pth`` checkpoint produced by :meth:`save`.
+        - ``None`` – defaults to the ``"core"`` variant.
+    device : str, optional
+        ``"cpu"``, ``"cuda"``, or ``None`` for auto-detect.
     """
-    
+
     def __init__(
         self,
         weights: Optional[Union[str, Path]] = None,
-        device: Optional[str] = None
+        device: Optional[str] = None,
     ):
-        """
-        Initialize BILT model.
-        
-        Args:
-            weights: Path to .pth model weights. If None, creates untrained model.
-            device: Device to use ('cpu', 'cuda', or None for auto-detect).
-        """
-        self.device = self._get_device(device)
-        self.model = None
-        self.class_names = None
-        self.num_classes = None
-        self.inferencer = None
-        
-        if weights:
+        self.device = self._resolve_device(device)
+        self.model: Optional[torch.nn.Module] = None
+        self.class_names: Optional[List[str]] = None
+        self.num_classes: Optional[int] = None
+        self.inferencer: Optional[Inferencer] = None
+        self._variant: str = DEFAULT_VARIANT
+
+        if weights is None:
+            # Uninitialized – will be fully set up in train()
+            logger.info(
+                f"BILT created without weights. "
+                f"Call train() to build a model, or pass a variant name."
+            )
+        elif isinstance(weights, (str, Path)) and is_variant_name(str(weights)):
+            # Variant name or alias supplied  e.g.  BILT("spark") or BILT("n")
+            from .variants import VARIANT_ALIASES
+            key = str(weights).lower().strip()
+            self._variant = VARIANT_ALIASES.get(key, key)
+            logger.info(
+                f"BILT variant '{self._variant}' selected. "
+                f"Call train() to train from scratch, or save/load weights."
+            )
+        else:
+            # Treat as a checkpoint path
             self.load(weights)
-    
-    def _get_device(self, device: Optional[str] = None) -> torch.device:
-        """Determine device to use."""
-        if device:
-            return torch.device(device)
-        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    def load(self, weights: Union[str, Path]) -> 'BILT':
-        """
-        Load model weights.
-        
-        Args:
-            weights: Path to .pth model file.
-            
-        Returns:
-            self for chaining.
-        """
-        weights = Path(weights)
-        logger.info(f"Loading model from {weights}")
-        
-        self.model, self.class_names = DetectionModel.load(weights)
-        self.num_classes = len(self.class_names)
-        self.model.to(self.device)
-        self.model.eval()
-        
-        # Create inferencer
-        self.inferencer = Inferencer(
-            model=self.model,
-            class_names=self.class_names,
-            device=self.device
-        )
-        
-        logger.info(f"Model loaded: {self.num_classes} classes")
-        return self
-    
+
+    # ---------------------------------------------------------------------- #
+    # Inference                                                               #
+    # ---------------------------------------------------------------------- #
+
     def predict(
         self,
-        source: Union[str, Path, Image.Image, np.ndarray, List],
-        conf: float = 0.25,
+        source: Union[str, Path, "Image.Image", np.ndarray, List],
+        conf: float = 0.15,
         iou: float = 0.45,
-        img_size: int = 640,
-        return_images: bool = False
-    ) -> Union[List[Dict], 'Results']:
+        img_size: Optional[int] = None,
+        return_images: bool = False,
+        max_det: int = 300,
+    ) -> Union[List[Dict], "Results"]:
         """
-        Run inference on images.
-        
-        Args:
-            source: Input source - can be:
-                - Path to image file
-                - Path to directory of images
-                - PIL Image
-                - numpy array
-                - List of any above
-            conf: Confidence threshold (0.0-1.0).
-            iou: NMS IoU threshold (0.0-1.0).
-            img_size: Input image size for model.
-            return_images: If True, return Results object with images.
-            
-        Returns:
-            List of detection dictionaries or Results object.
-            
-        Example:
-            >>> results = model.predict("image.jpg", conf=0.3)
-            >>> for det in results:
-            >>>     print(f"{det['class_name']}: {det['score']:.2f}")
+        Run object detection on one or more images.
+
+        Parameters
+        ----------
+        source       : file path, directory path, PIL Image, numpy array,
+                       or a list of any of the above.
+        conf         : minimum confidence score to keep a detection.
+        iou          : NMS IoU threshold.
+        img_size     : override inference resolution (defaults to variant size).
+        return_images: return a :class:`Results` object that includes annotated
+                       images instead of raw detection dicts.
+
+        Returns
+        -------
+        Single image  → list of detection dicts
+        Multiple / return_images=True  → :class:`Results`
         """
         if self.inferencer is None:
-            raise RuntimeError("No model loaded. Call load() or train() first.")
-        
-        # Update inferencer thresholds
+            raise RuntimeError(
+                "No model loaded. Call load() or train() first."
+            )
+
         self.inferencer.confidence_threshold = conf
         self.inferencer.nms_threshold = iou
-        self.inferencer.input_size = img_size
-        
-        # Handle different input types
+        self.inferencer.max_detections = max_det
+        if img_size is not None:
+            self.inferencer.input_size = img_size
+
         images = self._prepare_source(source)
-        
-        # Run inference
-        all_detections = []
-        original_images = []
-        
+
+        all_detections: List[List[Dict]] = []
+        original_images: List[Optional[Image.Image]] = []
+
         for img in images:
             if isinstance(img, (str, Path)):
-                pil_img = Image.open(img)
+                pil_img = Image.open(img).convert("RGB")
                 original_images.append(pil_img if return_images else None)
                 detections = self.inferencer.detect(pil_img)
             elif isinstance(img, Image.Image):
                 original_images.append(img if return_images else None)
                 detections = self.inferencer.detect(img)
             elif isinstance(img, np.ndarray):
-                pil_img = Image.fromarray(img)
+                pil_img = Image.fromarray(img).convert("RGB")
                 original_images.append(pil_img if return_images else None)
                 detections = self.inferencer.detect(pil_img)
             else:
                 raise ValueError(f"Unsupported image type: {type(img)}")
-            
+
             all_detections.append(detections)
-        
-        # Return raw detections if single image and not requesting Results
+
         if len(all_detections) == 1 and not return_images:
             return all_detections[0]
-        
+
         if return_images:
             return Results(all_detections, original_images, self.class_names)
-        
+
         return all_detections
-    
-    def _prepare_source(self, source) -> List:
-        """Convert source to list of images."""
-        if isinstance(source, list):
-            return source
-        
-        if isinstance(source, (str, Path)):
-            path = Path(source)
-            if path.is_dir():
-                # Load all images in directory
-                images = []
-                for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
-                    images.extend(list(path.glob(f"*{ext}")))
-                    images.extend(list(path.glob(f"*{ext.upper()}")))
-                return sorted(images)
-            else:
-                return [path]
-        
-        return [source]
-    
+
+    # ---------------------------------------------------------------------- #
+    # Training                                                                #
+    # ---------------------------------------------------------------------- #
+
     def train(
         self,
         dataset: Union[str, Path],
         epochs: int = 50,
         batch_size: int = 4,
-        img_size: int = 640,
-        learning_rate: float = 5e-4,
+        img_size: Optional[int] = None,
+        learning_rate: float = 2e-3,
         device: Optional[str] = None,
-        save_dir: Optional[Union[str, Path]] = "runs/train",
+        save_dir: Union[str, Path] = "runs/train",
         name: str = "exp",
-        **kwargs
+        variant: Optional[str] = None,
+        workers: int = 0,
+        # Training loop
+        warmup_epochs: int = 3,
+        backbone_lr_mult: float = 0.1,
+        weight_decay: float = 1e-4,
+        cos_lr_min: float = 1e-6,
+        grad_clip: float = 5.0,
+        # Loss
+        focal_alpha: float = 0.25,
+        focal_gamma: float = 2.0,
+        box_loss_weight: float = 1.0,
+        # Augmentation
+        augment: bool = True,
+        flip_prob: float = 0.5,
+        color_jitter: Optional[tuple] = (0.4, 0.4, 0.4, 0.1),
+        **kwargs,
     ) -> Dict[str, Any]:
         """
-        Train object detection model.
-        
-        Args:
-            dataset: Path to dataset directory (YOLO format).
-            epochs: Number of training epochs.
-            batch_size: Batch size (minimum 2 for batch normalization).
-            img_size: Input image size.
-            learning_rate: Learning rate.
-            device: Device to use (overrides init device).
-            save_dir: Directory to save training runs.
-            name: Experiment name.
-            **kwargs: Additional training arguments.
-            
-        Returns:
-            Dictionary with training metrics.
-            
-        Example:
-            >>> model = BILT()
-            >>> results = model.train(
-            ...     dataset="datasets/my_data",
-            ...     epochs=100,
-            ...     batch_size=8
-            ... )
+        Train an object detection model on a BILT-format dataset.
+
+        Parameters
+        ----------
+        dataset          : Root directory containing train/ and val/ splits.
+        epochs           : Number of training epochs.
+        batch_size       : Images per batch (minimum 2).
+        img_size         : Input resolution; defaults to the variant's setting.
+        learning_rate    : Initial AdamW learning rate for the detection head.
+        device           : Override device (``"cpu"``, ``"cuda"``, ``"mps"``).
+        save_dir         : Parent directory for training run outputs.
+        name             : Run sub-directory name (auto-incremented if exists).
+        variant          : Override the model variant (``"spark"``…``"max"``).
+        workers          : DataLoader worker processes (0 = main process).
+        warmup_epochs    : Epochs to keep backbone frozen (0 = no warmup).
+        backbone_lr_mult : Backbone LR = learning_rate * backbone_lr_mult.
+        weight_decay     : AdamW weight decay.
+        cos_lr_min       : Cosine annealing minimum learning rate.
+        grad_clip        : Gradient clipping max-norm (0 = disabled).
+        focal_alpha      : Focal loss alpha (class-balance weight).
+        focal_gamma      : Focal loss gamma (focusing strength).
+        box_loss_weight  : Regression loss weight relative to classification.
+        augment          : Enable/disable training augmentation.
+        flip_prob        : Probability of random horizontal flip (0–1).
+        color_jitter     : (brightness, contrast, saturation, hue) jitter
+                           magnitudes, or None to disable.
+        **kwargs         : Passed through to Trainer for forward-compatibility.
+
+        Returns
+        -------
+        dict with training metrics.
         """
         dataset = Path(dataset)
         save_dir = Path(save_dir)
-        
+
         if device:
             self.device = torch.device(device)
-        
-        # Enforce minimum batch size
+
+        # Determine variant
+        active_variant = variant or self._variant or DEFAULT_VARIANT
+
+        # Batch size guard
         if batch_size < 2:
-            logger.warning("Batch size must be >= 2 for batch normalization. Setting to 2.")
+            logger.warning("batch_size < 2 is not recommended. Setting to 2.")
             batch_size = 2
-        
-        # Create trainer
-        from .dataset import ObjectDetectionDataset, get_transforms
-        
-        # Load dataset to get class info
-        train_dataset = ObjectDetectionDataset(
-            images_dir=dataset / "train" / "images",
-            labels_dir=dataset / "train" / "labels",
-            transforms=get_transforms(img_size, training=True),
-            input_size=img_size
-        )
-        
-        # Get class names
+
+        # ------------------------------------------------------------------ #
+        # Read dataset class info (label scan only — no images loaded)       #
+        # ------------------------------------------------------------------ #
+        from .dataset import read_dataset_info
+
         yaml_path = dataset / "data.yaml"
         if not yaml_path.exists():
             for alt in [dataset / "data.yml", dataset / "dataset.yaml"]:
                 if alt.exists():
                     yaml_path = alt
                     break
-        
-        class_names = train_dataset.get_class_names(yaml_path if yaml_path.exists() else None)
-        num_classes = train_dataset.num_classes
-        
-        logger.info(f"Training on {num_classes} classes: {class_names}")
-        
-        # Create save directory
+
+        num_classes, class_names = read_dataset_info(
+            labels_dir=dataset / "train" / "labels",
+            yaml_path=yaml_path if yaml_path.exists() else None,
+        )
+        logger.info(f"Dataset: {num_classes} classes → {class_names}")
+
+        # ------------------------------------------------------------------ #
+        # Create run directory                                                #
+        # ------------------------------------------------------------------ #
         run_dir = save_dir / name
         counter = 1
         while run_dir.exists():
             run_dir = save_dir / f"{name}{counter}"
             counter += 1
         run_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize trainer
+
+        model_path = run_dir / "weights" / "best.pth"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # ------------------------------------------------------------------ #
+        # Train                                                               #
+        # ------------------------------------------------------------------ #
         trainer = Trainer(
             dataset_path=dataset,
             num_classes=num_classes,
@@ -269,53 +286,60 @@ class BILT:
             batch_size=batch_size,
             learning_rate=learning_rate,
             num_epochs=epochs,
-            num_workers=kwargs.get('workers', 0),
+            num_workers=workers,
             input_size=img_size,
-            device=self.device
+            device=self.device,
+            variant=active_variant,
+            warmup_epochs=warmup_epochs,
+            backbone_lr_mult=backbone_lr_mult,
+            weight_decay=weight_decay,
+            cos_lr_min=cos_lr_min,
+            grad_clip=grad_clip,
+            focal_alpha=focal_alpha,
+            focal_gamma=focal_gamma,
+            box_loss_weight=box_loss_weight,
+            augment=augment,
+            flip_prob=flip_prob,
+            color_jitter=color_jitter,
         )
-        
-        # Train
-        model_path = run_dir / "weights" / "best.pth"
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         results = trainer.train(model_path)
-        
-        # Load best model
+
+        # Load the best checkpoint
         self.load(model_path)
-        
-        logger.info(f"Training complete. Model saved to {model_path}")
-        
+        logger.info(f"Training complete. Best model at {model_path}")
+
         return results
-    
+
+    # ---------------------------------------------------------------------- #
+    # Evaluation                                                              #
+    # ---------------------------------------------------------------------- #
+
     def evaluate(
         self,
         dataset: Union[str, Path],
         batch_size: int = 4,
         conf: float = 0.25,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
         """
-        Evaluate model on validation dataset.
-        
-        Args:
-            dataset: Path to validation dataset or subdirectory.
-            batch_size: Batch size for evaluation.
-            conf: Confidence threshold.
-            **kwargs: Additional evaluation arguments.
-            
-        Returns:
-            Dictionary with evaluation metrics.
-            
-        Example:
-            >>> metrics = model.evaluate("datasets/val")
-            >>> print(f"mAP: {metrics['map']:.3f}")
+        Evaluate the loaded model on a validation split.
+
+        Parameters
+        ----------
+        dataset    : Path to dataset root or val/ subdirectory.
+        batch_size : Images to evaluate per batch.
+        conf       : Confidence threshold for counting detections.
+
+        Returns
+        -------
+        dict with evaluation metrics.
         """
         if self.model is None:
             raise RuntimeError("No model loaded. Call load() or train() first.")
-        
+
         dataset = Path(dataset)
-        
-        # Handle both full dataset path and val subdirectory
+
         if (dataset / "val" / "images").exists():
             images_dir = dataset / "val" / "images"
             labels_dir = dataset / "val" / "labels"
@@ -323,101 +347,186 @@ class BILT:
             images_dir = dataset / "images"
             labels_dir = dataset / "labels"
         else:
-            raise ValueError(f"Could not find images in {dataset}")
-        
+            raise ValueError(f"Could not locate images directory in {dataset}")
+
         evaluator = Evaluator(
             model=self.model,
             class_names=self.class_names,
-            device=self.device
+            device=self.device,
         )
-        
-        metrics = evaluator.evaluate_dataset(
+        return evaluator.evaluate_dataset(
             images_dir=images_dir,
             labels_dir=labels_dir,
             batch_size=batch_size,
-            confidence_threshold=conf
+            confidence_threshold=conf,
         )
-        
-        return metrics
-    
+
+    # ---------------------------------------------------------------------- #
+    # Save / Load                                                             #
+    # ---------------------------------------------------------------------- #
+
     def save(self, path: Union[str, Path]) -> None:
         """
-        Save model weights.
-        
-        Args:
-            path: Path to save .pth file.
+        Save model weights and metadata to *path*.
+
+        Parameters
+        ----------
+        path : File path ending in ``.pth``.
         """
         if self.model is None:
             raise RuntimeError("No model to save.")
-        
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
-        from .core import DetectionModel as DM
-        
-        # Create temporary wrapper
-        wrapper = DM(num_classes=self.num_classes, pretrained=False)
-        wrapper.model = self.model
-        
-        wrapper.save(path, self.class_names)
+
+        half_sd = {
+            k: v.half() if v.is_floating_point() else v
+            for k, v in self.model.state_dict().items()
+        }
+        checkpoint = {
+            "model_state_dict": half_sd,
+            "storage_dtype":    "float16",
+            "num_classes":      self.num_classes,
+            "class_names":      self.class_names,
+            "variant":          getattr(self.model, "variant", self._variant),
+            "input_size":       getattr(self.model, "input_size", 512),
+            "architecture":     "bilt_fpn",
+        }
+        torch.save(checkpoint, path)
         logger.info(f"Model saved to {path}")
-    
+
+    def load(self, weights: Union[str, Path]) -> "BILT":
+        """
+        Load a checkpoint produced by :meth:`save`.
+
+        Parameters
+        ----------
+        weights : Path to ``.pth`` file.
+
+        Returns
+        -------
+        self  (for chaining).
+        """
+        self.model, self.class_names = DetectionModel.load(weights, str(self.device))
+        self.num_classes = len(self.class_names)
+        self.model.to(self.device)
+        self.model.eval()
+        self._variant = getattr(self.model, "variant", DEFAULT_VARIANT)
+
+        self.inferencer = Inferencer(
+            model=self.model,
+            class_names=self.class_names,
+            device=self.device,
+            input_size=getattr(self.model, "input_size", 512),
+        )
+        logger.info(
+            f"Loaded BILT-{self._variant} "
+            f"({self.num_classes} classes) on {self.device}"
+        )
+        return self
+
+    # ---------------------------------------------------------------------- #
+    # Properties / dunder                                                     #
+    # ---------------------------------------------------------------------- #
+
     @property
     def names(self) -> List[str]:
-        """Get class names."""
-        return self.class_names if self.class_names else []
-    
-    def __repr__(self) -> str:
-        if self.model:
-            return f"BILT(classes={self.num_classes}, device={self.device})"
-        return f"BILT(untrained, device={self.device})"
+        """Class names list."""
+        return self.class_names or []
 
+    @property
+    def variant(self) -> str:
+        """Active variant name."""
+        return self._variant
+
+    @staticmethod
+    def variants() -> None:
+        """Print a summary of all available model variants."""
+        list_variants()
+
+    def _resolve_device(self, device: Optional[str]) -> torch.device:
+        if device:
+            return torch.device(device)
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def _prepare_source(self, source) -> List:
+        if isinstance(source, list):
+            return source
+        if isinstance(source, (str, Path)):
+            p = Path(source)
+            if p.is_dir():
+                imgs = []
+                for ext in [".jpg", ".jpeg", ".png", ".bmp"]:
+                    imgs.extend(p.glob(f"*{ext}"))
+                    imgs.extend(p.glob(f"*{ext.upper()}"))
+                return sorted(imgs)
+            return [p]
+        return [source]
+
+    def __repr__(self) -> str:
+        if self.model is not None:
+            return (
+                f"BILT(variant={self._variant}, "
+                f"classes={self.num_classes}, device={self.device})"
+            )
+        return f"BILT(variant={self._variant}, unloaded, device={self.device})"
+
+
+# ---------------------------------------------------------------------------
+# Results container
+# ---------------------------------------------------------------------------
 
 class Results:
-    """Results object for predictions with images."""
-    
-    def __init__(self, detections: List[List[Dict]], images: List[Image.Image], class_names: List[str]):
+    """
+    Holds batch inference results together with optional annotated images.
+
+    Returned by :meth:`BILT.predict` when ``return_images=True``.
+    """
+
+    def __init__(
+        self,
+        detections: List[List[Dict]],
+        images: List[Optional[Image.Image]],
+        class_names: Optional[List[str]],
+    ):
         self.detections = detections
         self.images = images
         self.class_names = class_names
-    
-    def __len__(self):
+
+    def __len__(self) -> int:
         return len(self.detections)
-    
-    def __getitem__(self, idx):
+
+    def __getitem__(self, idx: int) -> List[Dict]:
         return self.detections[idx]
-    
+
     def save(self, save_dir: Union[str, Path] = "runs/detect") -> None:
-        """Save annotated images."""
+        """Save annotated images to *save_dir*."""
         from .utils import draw_detections
-        
+
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for i, (dets, img) in enumerate(zip(self.detections, self.images)):
             if img is None:
                 continue
-            
             annotated = draw_detections(img, dets)
-            output_path = save_dir / f"result_{i}.jpg"
-            annotated.save(output_path)
-            logger.info(f"Saved {output_path}")
-    
-    def show(self):
-        """Display results (requires matplotlib)."""
+            out = save_dir / f"result_{i}.jpg"
+            annotated.save(out)
+            logger.info(f"Saved {out}")
+
+    def show(self) -> None:
+        """Display annotated images (requires matplotlib)."""
         try:
             import matplotlib.pyplot as plt
             from .utils import draw_detections
-            
+
             for dets, img in zip(self.detections, self.images):
                 if img is None:
                     continue
-                
                 annotated = draw_detections(img, dets)
                 plt.figure(figsize=(12, 8))
                 plt.imshow(annotated)
-                plt.axis('off')
+                plt.axis("off")
                 plt.show()
         except ImportError:
-
             logger.error("matplotlib required for show(). Use save() instead.")

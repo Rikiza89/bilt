@@ -1,4 +1,6 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2026 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 import logging
 import torch
@@ -36,10 +38,13 @@ def parse_bilt_label(
     img_height: int
 ) -> List[Dict[str, Any]]:
     """
-    Parse YOLO format label file to absolute pixel coordinates.
-    
-    YOLO format: class_id x_center y_center width height (normalized)
-    Output: List of {class_id, bbox: [x_min, y_min, x_max, y_max]}
+    Parse a BILT label file to absolute pixel coordinates.
+
+    Label format (one object per line, values normalised to [0, 1]):
+        class_id  x_center  y_center  width  height
+
+    Returns a list of dicts with keys ``class_id`` and
+    ``bbox`` ([x_min, y_min, x_max, y_max] in pixel coordinates).
     """
     annotations = []
     
@@ -99,7 +104,7 @@ def parse_bilt_label(
 
 
 def load_yaml_classes(yaml_path: Path) -> List[str]:
-    """Load class names from YOLO data.yaml file."""
+    """Load class names from a BILT/dataset data.yaml file."""
     try:
         import yaml
     except ImportError:
@@ -189,9 +194,10 @@ def draw_detections(image: Image.Image, detections: List[Dict]) -> Image.Image:
 
 def validate_dataset_structure(dataset_path: Path) -> tuple:
     """
-    Validate YOLO-style dataset structure.
-    
-    Expected:
+    Validate BILT dataset directory structure.
+
+    Expected layout::
+
         dataset/
             train/images/
             train/labels/

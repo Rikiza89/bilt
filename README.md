@@ -1,466 +1,365 @@
-# BILT - Because I Like Twice
+# BILT — Because I Like Twice
 
-<div align="center">
+**BILT** is a lightweight object detection library built entirely on PyTorch.
+It provides a clean, high-level API inspired by modern detection frameworks while remaining
+fully independent — using an original FPN-based detection architecture rather than any
+third-party detection model.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-1.10+-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+BILT automatically uses a CUDA GPU when one is available. No configuration needed — just
+install a CUDA-enabled PyTorch build and BILT picks it up for both training and inference.
 
-**A lightweight, CPU-optimized object detection library built on PyTorch**
-
-[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Examples](#examples)
-
-</div>
-
----
-
-## 🎯 What is BILT?
-
-BILT (Because I Like Twice) is a pure Python object detection library designed for ease of use and CPU efficiency. Built on PyTorch and torchvision, it provides a clean, YOLO-like API for training and inference without the complexity.
-
-### Why BILT?
-
-- **🚀 Simple API** - Train and detect with just a few lines of code
-- **💻 CPU-Optimized** - Works efficiently on systems without GPU
-- **🔧 Pure PyTorch** - No external dependencies on heavy frameworks
-- **📦 Lightweight** - Minimal footprint, easy to deploy
-- **🎓 Educational** - Clean, readable codebase perfect for learning
-- **🔌 Framework-Free** - No YOLO, no Ultralytics, just PyTorch
+> **License:** GNU Affero General Public License v3.0
+> **Copyright:** © 2026 Rikiza89
 
 ---
 
-## ✨ Features
+## Features
 
-- **SSD MobileNetV3** architecture for fast, efficient detection
-- **Multiple input formats** - paths, PIL Images, numpy arrays, directories
-- **Batch processing** - Process single images or entire datasets
-- **YOLO format datasets** - Compatible with standard YOLO dataset structure
-- **Platform detection** - Automatic optimization for Raspberry Pi, ARM, Windows, Linux
-- **Training callbacks** - Monitor and control training progress
-- **Model evaluation** - Built-in metrics and validation
-- **Easy export** - Save and load models with metadata
+- **Five model sizes** — *spark / flash / core / pro / max* — each with a different backbone so you can choose the right speed/accuracy trade-off
+- **Original architecture** — custom FPN neck + anchor-based detection head + focal loss; no dependency on proprietary detection code
+- **Five backbone architectures** — MobileNetV2, MobileNetV3-S/L, ResNet-50/101 (via torchvision), all **initialised with ImageNet pretrained weights** for rapid convergence even on tiny datasets
+- **Simple API** — `BILT("core")`, `.train()`, `.predict()`, `.evaluate()`, `.save()`, `.load()`
+- **GPU-first** — automatically uses CUDA when available; falls back to CPU seamlessly
+- **Pin-memory & non-blocking transfers** — DataLoader pins memory and tensor moves
+  use `non_blocking=True` on CUDA, overlapping CPU→GPU transfer with the forward pass
+- **Edge-friendly** — works on laptops, Raspberry Pi, and any CPU-only device
+- **Compact checkpoints** — weights stored in float16, halving file size with no inference accuracy loss
+- **Full training control** — every hyperparameter (LR, augmentation, loss, warmup) is exposed and overridable
 
 ---
 
-## 📦 Installation
+## Model Variants
 
-### From PyPI (coming soon)
+| Variant | Backbone | Input | FPN ch | File size (approx) | Best for |
+|---------|----------|-------|--------|--------------------|----------|
+| `spark` | MobileNetV2 | 320 px | 64 | ~9 MB | Embedded / real-time |
+| `flash` | MobileNetV3-Small | 416 px | 96 | ~13 MB | Edge / fast inference |
+| `core` | MobileNetV3-Large | 512 px | 128 | ~19 MB | General use (default) |
+| `pro` | ResNet-50 | 640 px | 256 | ~55 MB | High accuracy |
+| `max` | ResNet-101 | 640 px | 256 | ~95 MB | Maximum accuracy |
 
-```bash
-pip install bilt
+Short aliases are supported: `n / s / m / l / x` and `nano / small / medium / large / xlarge`.
+
+```python
+from bilt import BILT, list_variants
+list_variants()   # prints the table above
 ```
 
-### From source
+---
+
+## Installation
 
 ```bash
-git clone https://github.com/Rikiza89/bilt.git
-cd bilt
-pip install -e .
+pip install torch torchvision pillow numpy pyyaml
+pip install -e .          # development install from source
 ```
 
 ### Requirements
 
-```bash
-pip install torch torchvision Pillow numpy pyyaml
-```
-
-**Minimum versions:**
 - Python 3.8+
-- PyTorch 1.10+
-- torchvision 0.11+
+- torch ≥ 1.10
+- torchvision ≥ 0.11
+- Pillow ≥ 8.0
+- numpy ≥ 1.19
+- pyyaml ≥ 5.4
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Load and Predict
+### Inference on a saved model
 
 ```python
 from bilt import BILT
 
-# Load pretrained model
-model = BILT("weights/my_model.pth")
+model = BILT("weights/best.pth")
+detections = model.predict("image.jpg", conf=0.15)
 
-# Predict on single image
-results = model.predict("image.jpg", conf=0.25)
-
-# Print detections
-for det in results:
-    print(f"{det['class_name']}: {det['score']:.2f} at {det['bbox']}")
+for det in detections:
+    print(f"{det['class_name']}: {det['score']:.2f}  bbox={det['bbox']}")
 ```
 
-### Train a Model
+### Training from scratch
+
+BILT auto-detects CUDA — no `device=` argument needed on a GPU machine.
+All backbones start from **ImageNet pretrained weights**, so the model learns
+meaningful features even from a handful of annotated images.
 
 ```python
 from bilt import BILT
 
-# Create new model
-model = BILT()
+model = BILT("core")          # MobileNetV3-Large, 512 px
 
-# Train on your dataset
-model.train(
+metrics = model.train(
     dataset="datasets/my_dataset",
-    epochs=100,
-    batch_size=8,
-    img_size=640
+    epochs=50,
+    batch_size=4,
+    learning_rate=2e-3,
 )
-
-# Model is automatically saved to runs/train/exp/weights/best.pth
+print(metrics)
 ```
 
-### Batch Processing
+### Training with very few images
+
+BILT is designed to produce working detectors from as few as **2–5 annotated images**
+per class, thanks to pretrained backbones, augmentation, and tuned anchor matching.
 
 ```python
-# Process entire directory
-results = model.predict("images/", conf=0.3, return_images=True)
-
-# Save annotated images
-results.save("runs/detect/exp")
-```
-
----
-
-## 📚 Documentation
-
-### Model Initialization
-
-```python
-# Train from scratch
-model = BILT()
-
-# Load pretrained model
-model = BILT("weights/model.pth")
-
-# Specify device
-model = BILT("weights/model.pth", device="cuda")  # or "cpu"
-```
-
-### Prediction
-
-```python
-model.predict(
-    source,              # str, Path, Image, ndarray, or list
-    conf=0.25,          # Confidence threshold (0.0-1.0)
-    iou=0.45,           # NMS IoU threshold (0.0-1.0)
-    img_size=640,       # Input image size
-    return_images=False # Return Results object with images
+model = BILT("core")
+metrics = model.train(
+    dataset="datasets/my_dataset",
+    epochs=50,
+    batch_size=2,        # minimum for BatchNorm
 )
 ```
 
-**Supported input types:**
-- File path: `"image.jpg"`
-- Directory: `"images/"` (processes all images)
-- PIL Image: `Image.open("image.jpg")`
-- Numpy array: `np.array(...)`
-- List: `["img1.jpg", "img2.jpg", ...]`
-
-### Training
+### Choosing a different size
 
 ```python
-model.train(
-    dataset="datasets/my_data",  # Path to dataset root
-    epochs=100,                  # Number of epochs
-    batch_size=8,                # Batch size (min 2)
-    img_size=640,                # Input image size
-    learning_rate=0.001,         # Learning rate
-    device="cpu",                # Device ("cpu" or "cuda")
-    save_dir="runs/train",       # Save directory
-    name="exp",                  # Experiment name
-    workers=0                    # DataLoader workers (0 for Windows)
-)
+model = BILT("spark")   # nano — fastest
+model = BILT("flash")   # small
+model = BILT("core")    # medium (default)
+model = BILT("pro")     # large
+model = BILT("max")     # xlarge — most accurate
+
+# Short aliases also work
+model = BILT("n")       # same as spark
+model = BILT("m")       # same as core
+model = BILT("x")       # same as max
+```
+
+### Batch prediction with annotated images
+
+```python
+results = model.predict("images/", conf=0.15, return_images=True)
+results.save("runs/detect/exp")   # saves annotated images
+results.show()                    # displays with matplotlib
 ```
 
 ### Evaluation
 
 ```python
-metrics = model.evaluate(
-    dataset="datasets/val",  # Validation dataset path
-    batch_size=4,
-    conf=0.25
-)
-
-print(f"Total images: {metrics['total_images']}")
-print(f"Detections: {metrics['total_predictions']}")
-```
-
-### Save & Load
-
-```python
-# Save model
-model.save("models/my_model.pth")
-
-# Load model
-loaded_model = BILT("models/my_model.pth")
+metrics = model.evaluate("datasets/my_dataset")
+print(f"Avg detections/image: {metrics['avg_predictions_per_image']:.2f}")
 ```
 
 ---
 
-## 📁 Dataset Format
+## GPU Acceleration
 
-BILT uses YOLO format datasets:
+### Automatic device selection
+
+BILT checks `torch.cuda.is_available()` at startup in `Trainer`, `Inferencer`,
+and `Evaluator`. If a CUDA GPU is present it is used automatically — you do not
+need to pass `device="cuda"` anywhere.
+
+```python
+model = BILT("core")
+model.train(dataset="data/", epochs=50)   # uses GPU if available
+```
+
+To verify which device is active:
+
+```python
+model = BILT("weights/best.pth")
+print(model.device)    # cuda  or  cpu
+```
+
+### Forcing a specific device
+
+```python
+# Force CPU even on a GPU machine
+model = BILT("core", device="cpu")
+model.train(dataset="data/", device="cpu")
+
+# Force a specific GPU
+model = BILT("core", device="cuda:1")
+
+# Apple Silicon
+model = BILT("core", device="mps")
+```
+
+### What's optimised on CUDA
+
+| Optimisation | Benefit |
+|---|---|
+| `pin_memory=True` on DataLoader | Faster CPU→GPU page-locked memory copy |
+| `non_blocking=True` on `.to(device)` | GPU forward pass overlaps with next batch transfer |
+| `persistent_workers=True` when `workers > 0` | Worker processes stay alive between epochs |
+
+### CUDA install
+
+Install the CUDA-enabled PyTorch wheel that matches your driver:
+
+```bash
+# CUDA 11.8
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+Verify CUDA is visible to PyTorch before running BILT:
+
+```python
+import torch
+print(torch.cuda.is_available())   # True
+print(torch.cuda.get_device_name(0))
+```
+
+---
+
+## Dataset Format
+
+BILT uses the standard normalised label format compatible with most annotation
+tools (LabelImg, Roboflow, CVAT, etc.):
+
+```
+<class_id>  <x_center>  <y_center>  <width>  <height>
+```
+
+All five values are normalised to `[0, 1]` relative to the image size.
+
+### Expected directory layout
 
 ```
 dataset/
 ├── train/
-│   ├── images/
-│   │   ├── img1.jpg
-│   │   ├── img2.jpg
-│   │   └── ...
-│   └── labels/
-│       ├── img1.txt
-│       ├── img2.txt
-│       └── ...
+│   ├── images/   *.jpg / *.png / …
+│   └── labels/   *.txt
 ├── val/
 │   ├── images/
 │   └── labels/
-└── data.yaml
+└── data.yaml     (optional but recommended)
 ```
 
-**Label format** (YOLO): `class_id x_center y_center width height` (normalized 0-1)
+### data.yaml
 
-**data.yaml:**
 ```yaml
-train: /path/to/dataset/train/images
-val: /path/to/dataset/val/images
 nc: 3
-names: ['class1', 'class2', 'class3']
+names: [cat, dog, person]
 ```
 
 ---
 
-## 💡 Examples
+## Architecture
 
-### Example 1: Simple Detection
-
-```python
-from bilt import BILT
-
-model = BILT("weights/coco.pth")
-results = model.predict("street.jpg", conf=0.5)
-
-for det in results:
-    print(f"Found {det['class_name']} with {det['score']:.2%} confidence")
+```
+Input image (H×W)
+      │
+  ┌───▼────────────────────────┐
+  │  BILTBackbone              │  MobileNet / ResNet (ImageNet pretrained)
+  │  C3 (1/8)  C4 (1/16)  C5 (1/32)
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐
+  │  FPNNeck  (original)       │
+  │  P3    P4    P5    P6      │  all with fpn_channels
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐
+  │  BILTHead  (original)      │  shared across all FPN levels
+  │  cls_preds  +  box_preds   │  9 anchors/location (3 scales × 3 ratios)
+  └───┬────────────────────────┘
+      │
+  ┌───▼────────────────────────┐    ┌──────────────────────────────┐
+  │  Training                  │    │  Inference                   │
+  │  Anchor matching           │    │  Box decode + per-class NMS  │
+  │  Focal loss + Smooth-L1    │    │  Score filter + top-N cap    │
+  └────────────────────────────┘    └──────────────────────────────┘
 ```
 
-### Example 2: Training with Callback
+**Training losses**
 
-```python
-from bilt import BILT
-
-def training_callback(info):
-    epoch = info['epoch']
-    train_loss = info['train_loss']
-    val_loss = info['val_loss']
-    print(f"Epoch {epoch}: Train={train_loss:.4f}, Val={val_loss:.4f}")
-
-model = BILT()
-model.train(
-    dataset="datasets/custom",
-    epochs=50,
-    batch_size=4
-)
-```
-
-### Example 3: Batch Processing
-
-```python
-from bilt import BILT
-from pathlib import Path
-
-model = BILT("weights/model.pth")
-
-# Process all images in folder
-image_folder = Path("test_images")
-all_results = []
-
-for img_path in image_folder.glob("*.jpg"):
-    results = model.predict(str(img_path), conf=0.3)
-    all_results.append({
-        'image': img_path.name,
-        'detections': len(results),
-        'objects': [r['class_name'] for r in results]
-    })
-
-# Summary
-total_detections = sum(r['detections'] for r in all_results)
-print(f"Processed {len(all_results)} images")
-print(f"Found {total_detections} total objects")
-```
-
-### Example 4: Custom Training Loop
-
-```python
-from bilt import BILT
-
-# Train on different datasets sequentially
-model = BILT()
-
-datasets = ["datasets/cars", "datasets/pedestrians", "datasets/signs"]
-
-for dataset in datasets:
-    print(f"Training on {dataset}...")
-    model.train(
-        dataset=dataset,
-        epochs=30,
-        batch_size=8,
-        save_dir=f"runs/{Path(dataset).name}"
-    )
-```
+| Loss | Purpose |
+|------|---------|
+| Focal loss (α=0.25, γ=2.0) | Classification — handles class imbalance |
+| Smooth-L1 | Bounding-box regression |
 
 ---
 
-## 🖥️ Platform-Specific Optimizations
+## API Reference
 
-BILT automatically detects your platform and optimizes settings:
+### `BILT(weights=None, device=None)`
 
-| Platform | Batch Size | Epochs | Image Size | Workers |
-|----------|------------|--------|------------|---------|
-| **Raspberry Pi** | 2 | 30 | 320 | 0 |
-| **ARM (other)** | 2 | 100 | 480 | 0 |
-| **Windows** | 4 | 100 | 640 | 0 |
-| **Linux/Mac** | 4 | 100 | 640 | 2 |
+| Argument | Description |
+|----------|-------------|
+| `weights` | Variant name (`"spark"` … `"max"`), a `.pth` checkpoint path, or `None` |
+| `device`  | `"cpu"`, `"cuda"`, or `None` (auto) |
 
-Override defaults:
-```python
-model.train(
-    dataset="my_data",
-    batch_size=16,  # Override platform default
-    workers=4       # Override platform default
-)
-```
+### `.predict(source, conf, iou, img_size, return_images, max_det)`
 
----
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `source` | — | File path, directory, PIL Image, numpy array, or list |
+| `conf` | `0.15` | Minimum confidence score |
+| `iou` | `0.45` | NMS IoU threshold |
+| `img_size` | variant default | Override inference resolution |
+| `return_images` | `False` | Return `Results` with annotated images |
+| `max_det` | `300` | Maximum detections to return per image |
 
-## 🎯 Use Cases
+### `.train(dataset, epochs, batch_size, ...)`
 
-- **Edge Deployment** - Run detection on Raspberry Pi, Jetson Nano, or CPU-only servers
-- **Prototyping** - Quick experimentation without GPU requirements
-- **Learning** - Educational tool for understanding object detection
-- **Embedded Systems** - Lightweight detection for IoT devices
-- **Custom Applications** - Easy integration into Python applications
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `dataset` | — | Path to dataset root |
+| `epochs` | `50` | Training epochs |
+| `batch_size` | `4` | Images per batch (min 2) |
+| `img_size` | variant default | Training resolution |
+| `learning_rate` | `2e-3` | AdamW learning rate for the detection head |
+| `variant` | `"core"` | Override model variant for this run |
+| `save_dir` | `"runs/train"` | Output directory |
+| `name` | `"exp"` | Run sub-directory name |
+| `workers` | `0` | DataLoader worker processes |
+| `warmup_epochs` | `3` | Epochs with backbone frozen |
+| `backbone_lr_mult` | `0.1` | Backbone LR = `learning_rate × backbone_lr_mult` |
+| `weight_decay` | `1e-4` | AdamW weight decay |
+| `cos_lr_min` | `1e-6` | Cosine annealing minimum LR |
+| `grad_clip` | `5.0` | Gradient clipping max-norm (0 = disabled) |
+| `focal_alpha` | `0.25` | Focal loss alpha |
+| `focal_gamma` | `2.0` | Focal loss gamma |
+| `box_loss_weight` | `1.0` | Regression loss weight |
+| `augment` | `True` | Enable training augmentation |
+| `flip_prob` | `0.5` | Random horizontal flip probability |
+| `color_jitter` | `(0.4,0.4,0.4,0.1)` | Brightness/contrast/saturation/hue jitter |
 
----
+### `.evaluate(dataset, batch_size, conf)`
 
-## 🔧 Architecture
+Returns a dict with `total_images`, `total_predictions`, `total_ground_truth`,
+`avg_predictions_per_image`, `avg_ground_truth_per_image`.
 
-BILT uses **SSD (Single Shot MultiBox Detector)** with **MobileNetV3** backbone:
+### `.save(path)` / `.load(weights)`
 
-- **Lightweight** - Optimized for mobile and edge devices
-- **Fast** - Real-time inference on CPU
-- **Accurate** - Competitive mAP on standard benchmarks
-- **Proven** - Battle-tested architecture from PyTorch/torchvision
+Checkpoints are stored in **float16** to halve disk usage. They are transparently
+upcast back to float32 when loaded. The variant name, class names, and input size
+are all included so a single file is sufficient to restore a complete model.
 
----
+### `BILT.variants()`
 
-## 📊 Performance
-
-Benchmarks on CPU (Intel i5-8250U):
-
-| Image Size | Batch Size | FPS | mAP@0.5 |
-|------------|------------|-----|---------|
-| 320x320 | 1 | ~15 | 0.45 |
-| 640x640 | 1 | ~8 | 0.52 |
-| 640x640 | 4 | ~6 | 0.52 |
-
-*Results on COCO val2017 subset*
-
----
-
-## 🛠️ Advanced Features
-
-### Custom Image Preprocessing
-
-```python
-from PIL import Image
-import numpy as np
-
-# Load and preprocess
-img = Image.open("image.jpg")
-img_array = np.array(img)
-
-# Your preprocessing here
-img_array = custom_preprocessing(img_array)
-
-# Predict
-results = model.predict(img_array)
-```
-
-### Access Model Properties
-
-```python
-print(f"Model: {model}")
-print(f"Classes: {model.names}")
-print(f"Num classes: {model.num_classes}")
-print(f"Device: {model.device}")
-```
-
-### Results Object
-
-```python
-results = model.predict("image.jpg", return_images=True)
-
-# Save annotated images
-results.save("output/")
-
-# Display (requires matplotlib)
-results.show()
-
-# Access detections
-for i, dets in enumerate(results):
-    print(f"Image {i}: {len(dets)} detections")
-```
+Prints a summary of all five variants (static method, callable on the class).
 
 ---
 
-## 🤝 Contributing
+## Legal
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+BILT is an original work by **Rikiza89**, released under the
+**GNU Affero General Public License v3.0**.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- The detection architecture (FPN neck, detection head, anchor matching,
+  focal loss, smooth-L1) is written from scratch and is not derived from any
+  other project.
+- Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); weights are downloaded from torchvision's pretrained model hub (ImageNet) at first use.
+- No code from any other AGPL-encumbered project is incorporated.
 
----
-
-## 📝 License
-
-This project is licensed under the GNU Affero General Public License v3.0 License - see the [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE) for the full license text.
 
 ---
 
-## 🙏 Acknowledgments
+## Roadmap
 
-- Built on [PyTorch](https://pytorch.org/) and [torchvision](https://pytorch.org/vision/)
-- Inspired by [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-- SSD architecture from [torchvision.models.detection](https://pytorch.org/vision/stable/models.html#object-detection)
-
----
-
-## 📬 Contact
-
-- GitHub Issues: [Report bugs or request features](https://github.com/Rikiza89/bilt/issues)
-
----
-
-## 🗺️ Roadmap
-
-- [ ] GPU optimization and mixed precision training
-- [ ] Model export to ONNX and TensorRT
-- [ ] Additional architectures (Faster R-CNN, RetinaNet)
-- [ ] Data augmentation pipeline
-- [ ] Multi-GPU training support
-- [ ] Quantization for edge deployment
-- [ ] Web demo and Gradio interface
-- [ ] Pre-trained models on common datasets
-
----
-
-<div align="center">
-
-**Made with ❤️ by the BILT Team**
-
-[⭐ Star us on GitHub](https://github.com/Rikiza89/bilt) | [📖 Documentation](https://bilt.readthedocs.io) | [💬 Discussions](https://github.com/Rikiza89/bilt/discussions)
-
-</div>
+- [ ] mAP evaluation (COCO-style)
+- [ ] ONNX and TensorRT export
+- [ ] Mixed-precision (fp16) training
+- [ ] Multi-GPU training
+- [ ] Model export — ONNX weights from user-trained checkpoints
+- [ ] Web demo (Gradio)

@@ -1,82 +1,83 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2026 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 """
-Basic usage examples for BILT library.
+Basic BILT usage examples.
+
+All five model sizes use different backbone architectures:
+    spark  — MobileNetV2,       320 px  (nano / fastest)
+    flash  — MobileNetV3-Small, 416 px  (small)
+    core   — MobileNetV3-Large, 512 px  (medium / default)
+    pro    — ResNet-50,         640 px  (large)
+    max    — ResNet-101,        640 px  (xlarge / most accurate)
 """
 
-from bilt import BILT
+from bilt import BILT, list_variants
 
-# Example 1: Load model and predict
-print("="*60)
+# ── 0. List available variants ──────────────────────────────────────────────
+list_variants()
+
+# ── 1. Load a saved model and predict ───────────────────────────────────────
+print("=" * 60)
 print("Example 1: Load model and predict")
-print("="*60)
+print("=" * 60)
 
 model = BILT("weights/best.pth")
-results = model.predict("images/test.jpg", conf=0.25)
+detections = model.predict("images/test.jpg", conf=0.25)
 
-print(f"\nDetected {len(results)} objects:")
-for i, det in enumerate(results, 1):
-    print(f"{i}. {det['class_name']}: {det['score']:.2f} @ {det['bbox']}")
+print(f"\nDetected {len(detections)} objects:")
+for i, det in enumerate(detections, 1):
+    print(f"  {i}. {det['class_name']}: {det['score']:.2f}  bbox={det['bbox']}")
 
-# Example 2: Predict on multiple images
-print("\n" + "="*60)
+# ── 2. Batch prediction with annotated images ────────────────────────────────
+print("\n" + "=" * 60)
 print("Example 2: Batch prediction")
-print("="*60)
+print("=" * 60)
 
 results = model.predict("images/", conf=0.3, return_images=True)
 print(f"\nProcessed {len(results)} images")
-results.save("runs/detect/exp")
+results.save("runs/detect/exp")    # saves annotated images as JPEGs
 
-# Example 3: Train new model
-print("\n" + "="*60)
-print("Example 3: Train new model")
-print("="*60)
+# ── 3. Train a new model ─────────────────────────────────────────────────────
+print("\n" + "=" * 60)
+print("Example 3: Train a 'core' model (MobileNetV3-Large, 512 px)")
+print("=" * 60)
 
-model = BILT()
+model = BILT("core")               # pick any variant here
 metrics = model.train(
     dataset="datasets/my_dataset",
     epochs=50,
     batch_size=4,
-    img_size=640
 )
 
 print(f"\nTraining complete!")
-print(f"Final train loss: {metrics['final_train_loss']:.4f}")
-print(f"Final val loss: {metrics['final_val_loss']:.4f}")
-print(f"Model saved to: {metrics['model_path']}")
+print(f"  variant        : {metrics['variant']}")
+print(f"  final train loss: {metrics['final_train_loss']:.4f}")
+print(f"  final val loss  : {metrics['final_val_loss']:.4f}")
+print(f"  model saved to  : {metrics['model_path']}")
 
-# Example 4: Evaluate model
-print("\n" + "="*60)
-print("Example 4: Evaluate model")
-print("="*60)
+# ── 4. Evaluate model ────────────────────────────────────────────────────────
+print("\n" + "=" * 60)
+print("Example 4: Evaluate")
+print("=" * 60)
 
-metrics = model.evaluate("datasets/my_dataset/val", conf=0.25)
-print(f"\nEvaluation results:")
-print(f"Total images: {metrics['total_images']}")
-print(f"Total predictions: {metrics['total_predictions']}")
-print(f"Avg predictions per image: {metrics['avg_predictions_per_image']:.2f}")
+m = model.evaluate("datasets/my_dataset", conf=0.25)
+print(f"\n  Total images     : {m['total_images']}")
+print(f"  Total predictions: {m['total_predictions']}")
+print(f"  Avg pred / image : {m['avg_predictions_per_image']:.2f}")
 
-# Example 5: Different input types
-print("\n" + "="*60)
-print("Example 5: Different input types")
-print("="*60)
+# ── 5. Different input types ─────────────────────────────────────────────────
+print("\n" + "=" * 60)
+print("Example 5: Multiple input types")
+print("=" * 60)
 
 from PIL import Image
 import numpy as np
 
-# From path
-results1 = model.predict("image.jpg")
+r1 = model.predict("image.jpg")                   # file path
+r2 = model.predict(Image.open("image.jpg"))        # PIL Image
+r3 = model.predict(np.array(Image.open("image.jpg")))  # numpy array
+r4 = model.predict(["img1.jpg", "img2.jpg"])       # list of paths
 
-# From PIL Image
-img = Image.open("image.jpg")
-results2 = model.predict(img)
-
-# From numpy array
-img_array = np.array(img)
-results3 = model.predict(img_array)
-
-# From list
-results4 = model.predict(["img1.jpg", "img2.jpg", "img3.jpg"])
-
-
-print("All input types work!")
+print("All input types processed successfully.")

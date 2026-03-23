@@ -1,4 +1,6 @@
-# BILT (Because I Like Twice) - A PyTorch-based object detection library -  AGPL-3.0 License.
+# BILT (Because I Like Twice) - A PyTorch-based object detection library
+# Copyright (C) 2026 Rikiza89
+# Licensed under the GNU Affero General Public License v3.0
 
 import torch
 from pathlib import Path
@@ -21,7 +23,12 @@ class Evaluator:
     ):
         self.model = model
         self.class_names = class_names
-        self.device = device if device else torch.device('cpu')
+        if device is not None:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
         self.model.to(self.device)
         self.model.eval()
     
@@ -45,16 +52,18 @@ class Evaluator:
             batch_size=batch_size,
             num_workers=0,
             shuffle=False,
-            training=False
+            training=False,
+            pin_memory=(self.device.type == "cuda"),
         )
         
         total_images = 0
         total_predictions = 0
         total_ground_truth = 0
         
+        _nb = self.device.type == "cuda"
         with torch.no_grad():
             for images, targets in test_loader:
-                images = images.to(self.device)
+                images = images.to(self.device, non_blocking=_nb)
                 
                 # Get predictions
                 predictions = self.model(images)
