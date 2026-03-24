@@ -159,9 +159,10 @@ class Inferencer:
                                   orig_h / self.input_size])   # (4,)
         boxes = (boxes * scale).long()                          # integer pixel coords
 
-        # Clamp to image bounds [all at once]
-        max_vals = boxes.new_tensor([orig_w, orig_h, orig_w, orig_h])
-        boxes = boxes.clamp(min=0).clamp_max(max_vals.unsqueeze(0))
+        # Clamp to image bounds — use torch.minimum for unambiguous tensor clamping
+        boxes = boxes.clamp(min=0)
+        max_vals = boxes.new_tensor([orig_w, orig_h, orig_w, orig_h])  # (4,)
+        boxes = torch.minimum(boxes, max_vals.unsqueeze(0))             # broadcast (1,4)
 
         # Drop degenerate boxes (after clamping)
         valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
