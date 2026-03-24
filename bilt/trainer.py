@@ -509,13 +509,15 @@ class Trainer:
             )
 
             if callback:
-                callback({
+                should_stop = callback({
                     "epoch":        epoch + 1,
                     "total_epochs": self.num_epochs,
                     "train_loss":   train_loss,
                     "val_loss":     val_loss,
                     "lr":           current_lr,
                 })
+                if should_stop:
+                    break
 
             # ── Save best checkpoint ───────────────────────────────────────
             if val_loss < best_val_loss:
