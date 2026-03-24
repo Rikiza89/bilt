@@ -178,7 +178,7 @@ def ciou_loss(
     with torch.no_grad():
         alpha_ciou = v / (1.0 - iou + v + eps)
 
-    ciou = iou - rho2 / c2 - alpha_ciou * v
+    ciou = (iou - rho2 / c2 - alpha_ciou * v).clamp(-1.0, 1.0)
 
     # loss = 1 − CIoU, summed (caller divides by num_pos)
     return (1.0 - ciou).sum()
