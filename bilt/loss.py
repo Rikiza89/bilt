@@ -9,18 +9,27 @@ BILTLoss combines:
   - Focal loss  (classification)  — focuses training on hard examples by
     down-weighting well-classified ones.  Introduced in RetinaNet
     (Lin et al. 2017, https://arxiv.org/abs/1708.02002).
-  - Smooth-L1 loss  (bounding-box regression)  — less sensitive to outliers
-    than plain L1 or L2 loss.
+  - Box regression loss — either Smooth-L1 or CIoU.
+
+    Smooth-L1  (default): less sensitive to outliers than L1/L2, operates
+    on encoded deltas (fast, no anchor decoding required).
+
+    CIoU (Complete IoU, Zheng et al. 2020): directly optimises the IoU
+    between predicted and ground-truth boxes, adding a centre-distance
+    penalty and an aspect-ratio consistency term.  Produces tighter boxes
+    and higher mAP, especially on small datasets.
 
 Both losses are normalised by the number of positive anchors in the batch so
 that the scale remains roughly constant across different batch sizes and
 image densities.
 """
 
+import math
+from typing import Dict, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict
 
 
 # ---------------------------------------------------------------------------
@@ -95,12 +104,93 @@ def smooth_l1_loss(
 
 
 # ---------------------------------------------------------------------------
+# CIoU loss
+# ---------------------------------------------------------------------------
+
+def ciou_loss(
+    pred_boxes: torch.Tensor,
+    target_boxes: torch.Tensor,
+    eps: float = 1e-7,
+) -> torch.Tensor:
+    """
+    Complete IoU loss (Zheng et al. 2020, https://arxiv.org/abs/1911.08287).
+
+    Unlike Smooth-L1 which works on encoded coordinate deltas, CIoU directly
+    optimises three geometric properties:
+      1. Overlap area  (IoU term)
+      2. Centre-point distance  (ρ² / c² penalty)
+      3. Aspect-ratio consistency  (α × v penalty)
+
+    Parameters
+    ----------
+    pred_boxes   : (N, 4)  predicted boxes  [x1, y1, x2, y2]  pixel coords
+    target_boxes : (N, 4)  ground-truth boxes  [x1, y1, x2, y2]  pixel coords
+    eps          : float   small constant for numerical stability
+
+    Returns
+    -------
+    loss : scalar  mean CIoU loss  (1 − CIoU, averaged over N)
+    """
+    # ── Intersection ──────────────────────────────────────────────────────────
+    inter_x1 = torch.max(pred_boxes[:, 0], target_boxes[:, 0])
+    inter_y1 = torch.max(pred_boxes[:, 1], target_boxes[:, 1])
+    inter_x2 = torch.min(pred_boxes[:, 2], target_boxes[:, 2])
+    inter_y2 = torch.min(pred_boxes[:, 3], target_boxes[:, 3])
+
+    inter_w = (inter_x2 - inter_x1).clamp(min=0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0)
+    inter_area = inter_w * inter_h
+
+    # ── Union ─────────────────────────────────────────────────────────────────
+    pred_w   = (pred_boxes[:, 2]   - pred_boxes[:, 0]).clamp(min=0)
+    pred_h   = (pred_boxes[:, 3]   - pred_boxes[:, 1]).clamp(min=0)
+    target_w = (target_boxes[:, 2] - target_boxes[:, 0]).clamp(min=0)
+    target_h = (target_boxes[:, 3] - target_boxes[:, 1]).clamp(min=0)
+
+    pred_area   = pred_w   * pred_h
+    target_area = target_w * target_h
+    union_area  = pred_area + target_area - inter_area + eps
+
+    iou = inter_area / union_area   # (N,)
+
+    # ── Smallest enclosing box diagonal² ─────────────────────────────────────
+    encl_x1 = torch.min(pred_boxes[:, 0], target_boxes[:, 0])
+    encl_y1 = torch.min(pred_boxes[:, 1], target_boxes[:, 1])
+    encl_x2 = torch.max(pred_boxes[:, 2], target_boxes[:, 2])
+    encl_y2 = torch.max(pred_boxes[:, 3], target_boxes[:, 3])
+
+    c2 = (encl_x2 - encl_x1) ** 2 + (encl_y2 - encl_y1) ** 2 + eps
+
+    # ── Centre-distance penalty ────────────────────────────────────────────
+    pred_cx   = (pred_boxes[:, 0]   + pred_boxes[:, 2])   / 2
+    pred_cy   = (pred_boxes[:, 1]   + pred_boxes[:, 3])   / 2
+    target_cx = (target_boxes[:, 0] + target_boxes[:, 2]) / 2
+    target_cy = (target_boxes[:, 1] + target_boxes[:, 3]) / 2
+
+    rho2 = (pred_cx - target_cx) ** 2 + (pred_cy - target_cy) ** 2
+
+    # ── Aspect-ratio consistency term ─────────────────────────────────────────
+    v = (4.0 / (math.pi ** 2)) * (
+        torch.atan(target_w / (target_h + eps))
+        - torch.atan(pred_w  / (pred_h   + eps))
+    ) ** 2
+
+    with torch.no_grad():
+        alpha_ciou = v / (1.0 - iou + v + eps)
+
+    ciou = iou - rho2 / c2 - alpha_ciou * v
+
+    # loss = 1 − CIoU, summed (caller divides by num_pos)
+    return (1.0 - ciou).sum()
+
+
+# ---------------------------------------------------------------------------
 # Combined loss module
 # ---------------------------------------------------------------------------
 
 class BILTLoss(nn.Module):
     """
-    Joint focal + smooth-L1 detection loss.
+    Joint focal + box regression detection loss.
 
     Parameters
     ----------
@@ -108,6 +198,8 @@ class BILTLoss(nn.Module):
     alpha       : float  Focal loss alpha (class-balance weight).
     gamma       : float  Focal loss gamma (focusing strength).
     box_weight  : float  Relative weight of regression loss vs. cls loss.
+    use_ciou    : bool   Use CIoU box loss instead of Smooth-L1.
+                         Requires *anchors* to be passed in forward().
     """
 
     def __init__(
@@ -116,12 +208,14 @@ class BILTLoss(nn.Module):
         alpha: float = 0.25,
         gamma: float = 2.0,
         box_weight: float = 1.0,
+        use_ciou: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.alpha = alpha
         self.gamma = gamma
         self.box_weight = box_weight
+        self.use_ciou = use_ciou
 
     def forward(
         self,
@@ -130,8 +224,14 @@ class BILTLoss(nn.Module):
         cls_targets: torch.Tensor, # (B, A)  -1=ignore, 0=bg, >0=class
         box_targets: torch.Tensor, # (B, A, 4) encoded deltas
         pos_mask: torch.Tensor,    # (B, A)  bool
+        anchors: Optional[torch.Tensor] = None,  # (A, 4) — required for CIoU
     ) -> Dict[str, torch.Tensor]:
         """
+        Parameters
+        ----------
+        anchors : (A, 4) anchor boxes in [x1,y1,x2,y2] pixel coords.
+                  Required when use_ciou=True; ignored for Smooth-L1.
+
         Returns
         -------
         dict with keys 'total', 'cls', 'box'
@@ -160,13 +260,31 @@ class BILTLoss(nn.Module):
         ) / num_pos
 
         # ------------------------------------------------------------------ #
-        # Regression loss (smooth-L1, positive anchors only)                 #
+        # Regression loss (positive anchors only)                            #
         # ------------------------------------------------------------------ #
         if pos_mask.any():
-            box_loss = smooth_l1_loss(
-                box_preds[pos_mask],
-                box_targets[pos_mask],
-            ) / num_pos
+            if self.use_ciou and anchors is not None:
+                # Decode predictions and targets to absolute [x1,y1,x2,y2]
+                # and compute geometry-aware CIoU loss.
+                from .anchors import decode_boxes
+
+                # Gather anchors for each positive (same anchors across batch)
+                B, A = pos_mask.shape
+                anchor_idx = (
+                    torch.arange(A, device=pos_mask.device)
+                    .unsqueeze(0).expand(B, -1)        # (B, A)
+                    [pos_mask]                          # (N_pos,)
+                )
+                pos_anchors  = anchors[anchor_idx]         # (N_pos, 4)
+                pred_decoded = decode_boxes(pos_anchors, box_preds[pos_mask])
+                tgt_decoded  = decode_boxes(pos_anchors, box_targets[pos_mask])
+
+                box_loss = ciou_loss(pred_decoded, tgt_decoded) / num_pos
+            else:
+                box_loss = smooth_l1_loss(
+                    box_preds[pos_mask],
+                    box_targets[pos_mask],
+                ) / num_pos
         else:
             box_loss = cls_preds.new_tensor(0.0)
 

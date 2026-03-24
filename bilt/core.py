@@ -63,6 +63,7 @@ class BILTDetector(nn.Module):
         self,
         variant: str,
         num_classes: int,
+        use_ciou: bool = False,
     ):
         super().__init__()
 
@@ -109,7 +110,7 @@ class BILTDetector(nn.Module):
         # ------------------------------------------------------------------ #
         # Loss and matcher (used only during training)                        #
         # ------------------------------------------------------------------ #
-        self.criterion = BILTLoss(num_classes)
+        self.criterion = BILTLoss(num_classes, use_ciou=use_ciou)
         self.matcher = AnchorMatcher()
 
     # ---------------------------------------------------------------------- #
@@ -192,7 +193,8 @@ class BILTDetector(nn.Module):
         pos_masks = torch.stack(all_pos_masks)        # (B, A)
 
         return self.criterion(
-            cls_preds, box_preds, cls_targets, box_targets, pos_masks
+            cls_preds, box_preds, cls_targets, box_targets, pos_masks,
+            anchors=anchors,
         )
 
     # ---------------------------------------------------------------------- #
@@ -289,11 +291,12 @@ class DetectionModel:
         variant: str = DEFAULT_VARIANT,
         num_classes: int = 80,
         class_names: Optional[List[str]] = None,
+        use_ciou: bool = False,
     ):
         self.variant = variant
         self.num_classes = num_classes
         self.class_names = class_names or [str(i) for i in range(1, num_classes + 1)]
-        self.model = BILTDetector(variant, num_classes)
+        self.model = BILTDetector(variant, num_classes, use_ciou=use_ciou)
 
     # ---------------------------------------------------------------------- #
     # Delegation                                                              #
