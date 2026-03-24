@@ -300,7 +300,7 @@ class ObjectDetectionDataset(Dataset):
                 bx[:, [0, 2]] = bx[:, [0, 2]].clamp(x1, x2)
                 bx[:, [1, 3]] = bx[:, [1, 3]].clamp(y1, y2)
                 # filter degenerate boxes
-                valid = (bx[:, 2] > bx[:, 0] + 1) & (bx[:, 3] > bx[:, 1] + 1)
+                valid = (bx[:, 2] > bx[:, 0]) & (bx[:, 3] > bx[:, 1])
                 bx = bx[valid]
                 lbl_i = torch.tensor(
                     [self.class_id_to_idx[a["class_id"]] + 1 for a in anns_i],

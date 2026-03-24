@@ -173,7 +173,7 @@ class Trainer:
         mosaic_prob: float = 0.5,
         # EMA
         use_ema: bool = False,
-        ema_decay: float = 0.9999,
+        ema_decay: float = 0.99,
     ):
         self.dataset_path = Path(dataset_path)
         self.num_classes = num_classes
