@@ -55,8 +55,9 @@ class ModelEMA:
     decay : float       EMA decay (0.999 – 0.9999 typical; higher = smoother).
     """
 
-    def __init__(self, model: nn.Module, decay: float = 0.9999):
+    def __init__(self, model: nn.Module, decay: float = 0.99):
         self.decay = decay
+        self.steps = 0          # used to compute adaptive warm-up decay
         # Track ALL named parameters (including frozen backbone params) so
         # that the shadow is populated before the backbone unfreezes.
         # Only requires_grad=True params are updated in update(), but having
@@ -68,12 +69,20 @@ class ModelEMA:
 
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
-        """Blend current model weights into the shadow copy."""
+        """Blend current model weights into the shadow copy.
+
+        Adaptive decay: starts near 0 and ramps toward self.decay so that
+        the shadow converges in tens of steps regardless of the chosen max
+        decay.  Formula matches YOLOv5's EMA warm-up strategy:
+            d = min(decay, (1 + steps) / (10 + steps))
+        """
+        self.steps += 1
+        d = min(self.decay, (1.0 + self.steps) / (10.0 + self.steps))
         for name, param in model.named_parameters():
             if param.requires_grad and name in self.shadow:
                 self.shadow[name] = (
-                    self.decay * self.shadow[name]
-                    + (1.0 - self.decay) * param.data.float().cpu()
+                    d * self.shadow[name]
+                    + (1.0 - d) * param.data.float().cpu()
                 )
 
     def apply_to(self, model: nn.Module) -> Dict[str, torch.Tensor]:
@@ -433,6 +442,7 @@ class Trainer:
     def train(
         self,
         save_path: Path,
+        last_save_path: Optional[Path] = None,
         callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -539,12 +549,31 @@ class Trainer:
         elapsed = time.time() - t0
         logger.info(f"Training finished in {elapsed:.1f}s")
 
+        # Save the final model state as last.pt (regardless of val loss)
+        if last_save_path is not None:
+            class_id_mapping = {
+                "class_id_to_idx": getattr(
+                    self.train_loader.dataset, "class_id_to_idx", None
+                ),
+                "idx_to_class_id": getattr(
+                    self.train_loader.dataset, "idx_to_class_id", None
+                ),
+            }
+            self.detection_model.save(
+                last_save_path, self.class_names, class_id_mapping
+            )
+            logger.info(f"Last checkpoint saved → {last_save_path}")
+
         return {
-            "variant":           self.variant,
-            "num_epochs":        self.num_epochs,
-            "final_train_loss":  self.training_losses[-1],
-            "final_val_loss":    self.validation_losses[-1],
-            "best_val_loss":     best_val_loss,
-            "training_time":     elapsed,
-            "model_path":        str(save_path),
+            "variant":            self.variant,
+            "num_epochs":         self.num_epochs,
+            "final_train_loss":   self.training_losses[-1],
+            "final_val_loss":     self.validation_losses[-1],
+            "best_val_loss":      best_val_loss,
+            "training_time":      elapsed,
+            "model_path":         str(save_path),
+            "training_losses":    list(self.training_losses),
+            "validation_losses":  list(self.validation_losses),
+            "num_train":          len(self.train_loader.dataset),
+            "num_val":            len(self.val_loader.dataset),
         }
