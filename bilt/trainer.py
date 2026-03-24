@@ -58,18 +58,20 @@ class ModelEMA:
     def __init__(self, model: nn.Module, decay: float = 0.99):
         self.decay = decay
         self.steps = 0          # used to compute adaptive warm-up decay
-        # Track ALL named parameters (including frozen backbone params) so
-        # that the shadow is populated before the backbone unfreezes.
-        # Only requires_grad=True params are updated in update(), but having
-        # frozen params in the shadow ensures the checkpoint is consistent.
-        self.shadow: Dict[str, torch.Tensor] = {
-            name: param.data.clone().float().cpu()
-            for name, param in model.named_parameters()
-        }
+        # Track ALL named parameters (including frozen backbone params) AND
+        # floating-point buffers (BatchNorm running_mean / running_var) so
+        # that the saved EMA checkpoint is fully consistent: weights AND BN
+        # statistics all come from the same smoothed trajectory.
+        self.shadow: Dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            self.shadow[name] = param.data.clone().float().cpu()
+        for name, buf in model.named_buffers():
+            if buf.is_floating_point():
+                self.shadow[name] = buf.data.clone().float().cpu()
 
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
-        """Blend current model weights into the shadow copy.
+        """Blend current model weights and buffers into the shadow copy.
 
         Adaptive decay: starts near 0 and ramps toward self.decay so that
         the shadow converges in tens of steps regardless of the chosen max
@@ -78,32 +80,47 @@ class ModelEMA:
         """
         self.steps += 1
         d = min(self.decay, (1.0 + self.steps) / (10.0 + self.steps))
+        # Trainable parameters
         for name, param in model.named_parameters():
             if param.requires_grad and name in self.shadow:
                 self.shadow[name] = (
                     d * self.shadow[name]
                     + (1.0 - d) * param.data.float().cpu()
                 )
+        # Floating-point buffers (BN running_mean, running_var, …)
+        for name, buf in model.named_buffers():
+            if buf.is_floating_point() and name in self.shadow:
+                self.shadow[name] = (
+                    d * self.shadow[name]
+                    + (1.0 - d) * buf.data.float().cpu()
+                )
 
     def apply_to(self, model: nn.Module) -> Dict[str, torch.Tensor]:
         """
-        Overwrite model parameters with EMA weights.
+        Overwrite model parameters and buffers with EMA values.
 
-        Returns the original weights so they can be restored afterwards.
+        Returns the original values so they can be restored afterwards.
         """
         backup: Dict[str, torch.Tensor] = {}
         for name, param in model.named_parameters():
             if name in self.shadow:
                 backup[name] = param.data.clone()
                 param.data.copy_(self.shadow[name].to(param.dtype).to(param.device))
+        for name, buf in model.named_buffers():
+            if name in self.shadow:
+                backup[name] = buf.data.clone()
+                buf.data.copy_(self.shadow[name].to(buf.dtype).to(buf.device))
         return backup
 
     @staticmethod
     def restore(model: nn.Module, backup: Dict[str, torch.Tensor]) -> None:
-        """Restore model parameters from a backup dict."""
+        """Restore model parameters and buffers from a backup dict."""
         for name, param in model.named_parameters():
             if name in backup:
                 param.data.copy_(backup[name])
+        for name, buf in model.named_buffers():
+            if name in backup:
+                buf.data.copy_(backup[name])
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +293,18 @@ class Trainer:
         # ------------------------------------------------------------------ #
         self.ema: Optional[ModelEMA] = None
         if use_ema:
-            self.ema = ModelEMA(self.detection_model.model, decay=ema_decay)
-            logger.info(f"EMA enabled (decay={ema_decay})")
+            # Auto-compute a sensible decay from dataset size and batch size.
+            # Target: EMA window ≈ 2 epochs → decay = 1 - 1/(2*steps_per_epoch).
+            # Clamped to [0.90, 0.9999] so it works for tiny and large datasets.
+            steps_per_epoch = max(1, len(self.train_loader.dataset) // batch_size)
+            auto_decay = max(0.90, min(0.9999, 1.0 - 1.0 / (2 * steps_per_epoch)))
+            logger.info(
+                f"EMA auto-decay: dataset={len(self.train_loader.dataset)} "
+                f"batch={batch_size} steps/epoch={steps_per_epoch} "
+                f"→ decay={auto_decay:.4f}"
+            )
+            self.ema = ModelEMA(self.detection_model.model, decay=auto_decay)
+            self.ema_decay = auto_decay   # store for reference
 
         # ------------------------------------------------------------------ #
         # Optimiser and LR scheduler                                         #
