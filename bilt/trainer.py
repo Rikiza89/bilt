@@ -20,9 +20,10 @@ Handles the full training loop:
 """
 
 import copy
+import math
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -56,11 +57,13 @@ class ModelEMA:
 
     def __init__(self, model: nn.Module, decay: float = 0.9999):
         self.decay = decay
-        # Deep-copy the initial weights so shadow is always on CPU float32
+        # Track ALL named parameters (including frozen backbone params) so
+        # that the shadow is populated before the backbone unfreezes.
+        # Only requires_grad=True params are updated in update(), but having
+        # frozen params in the shadow ensures the checkpoint is consistent.
         self.shadow: Dict[str, torch.Tensor] = {
             name: param.data.clone().float().cpu()
             for name, param in model.named_parameters()
-            if param.requires_grad
         }
 
     @torch.no_grad()
@@ -298,29 +301,48 @@ class Trainer:
         lr_warmup_epochs: int,
     ) -> torch.optim.lr_scheduler.LRScheduler:
         """
-        Build a SequentialLR: linear warmup ramp then cosine annealing.
+        Build a LambdaLR combining linear warmup then cosine annealing.
 
-        If lr_warmup_epochs == 0 use pure cosine annealing (original
+        Using a single LambdaLR avoids the double-step initialisation issue
+        that arises when LinearLR and CosineAnnealingLR are chained via
+        SequentialLR — each sub-scheduler calls step() during __init__,
+        causing the LR to be overwritten and the warmup to start at full
+        learning rate instead of the intended 10%.
+
+        If lr_warmup_epochs == 0 uses pure CosineAnnealingLR (original
         behaviour).
         """
-        if lr_warmup_epochs > 0:
-            warmup = torch.optim.lr_scheduler.LinearLR(
-                optimizer,
-                start_factor=0.1,
-                end_factor=1.0,
-                total_iters=lr_warmup_epochs,
-            )
-            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=max(1, total_epochs - lr_warmup_epochs),
-                eta_min=self.cos_lr_min,
-            )
-            return torch.optim.lr_scheduler.SequentialLR(
-                optimizer,
-                schedulers=[warmup, cosine],
-                milestones=[lr_warmup_epochs],
-            )
-        return get_lr_scheduler(optimizer, total_epochs, self.cos_lr_min)
+        if lr_warmup_epochs <= 0:
+            return get_lr_scheduler(optimizer, total_epochs, self.cos_lr_min)
+
+        cos_epochs   = max(1, total_epochs - lr_warmup_epochs)
+        cos_lr_min   = self.cos_lr_min
+        # Capture per-group base LRs before any scheduler modifies them
+        base_lrs: List[float] = [g['lr'] for g in optimizer.param_groups]
+
+        def _make_lambda(base_lr: float):
+            min_factor = (cos_lr_min / base_lr) if base_lr > 0 else 0.0
+            def fn(epoch: int) -> float:
+                epoch = max(0, epoch)          # guard against -1 on some versions
+                if epoch < lr_warmup_epochs:
+                    # Linear ramp: 10 % → 100 % over lr_warmup_epochs epochs
+                    return 0.1 + 0.9 * epoch / max(1, lr_warmup_epochs)
+                # Cosine annealing for remaining epochs
+                t = epoch - lr_warmup_epochs
+                cosine_val = 0.5 * (1.0 + math.cos(math.pi * t / cos_epochs))
+                return max(min_factor, cosine_val)
+            return fn
+
+        lambdas = [_make_lambda(b) for b in base_lrs]
+        sched   = torch.optim.lr_scheduler.LambdaLR(optimizer, lambdas)
+
+        # Explicitly apply the warmup start factor so that epoch 0 trains at
+        # 10 % LR regardless of whether this PyTorch version calls step()
+        # inside __init__ or not.
+        for group, base_lr in zip(optimizer.param_groups, base_lrs):
+            group['lr'] = base_lr * 0.1
+
+        return sched
 
     # ---------------------------------------------------------------------- #
 
