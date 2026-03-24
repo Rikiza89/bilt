@@ -57,7 +57,9 @@ VARIANT_CONFIGS: Dict[str, Dict[str, Any]] = {
         "input_size": 640,
         "fpn_channels": 256,
         "head_num_convs": 4,
-        "anchor_sizes": [32, 64, 128, 256],
+        # Anchor sizes scaled 2× relative to spark (320px → 640px) so that
+        # the anchor-to-image coverage ratio remains the same across variants.
+        "anchor_sizes": [64, 128, 256, 512],
         "anchor_scales": (1.0, 1.26, 1.587),
         "anchor_aspect_ratios": (0.5, 1.0, 2.0),
         "description": "Large - high accuracy",
@@ -67,7 +69,8 @@ VARIANT_CONFIGS: Dict[str, Dict[str, Any]] = {
         "input_size": 640,
         "fpn_channels": 256,
         "head_num_convs": 4,
-        "anchor_sizes": [32, 64, 128, 256],
+        # Same 2× scaling as pro — both use 640px input.
+        "anchor_sizes": [64, 128, 256, 512],
         "anchor_scales": (1.0, 1.26, 1.587),
         "anchor_aspect_ratios": (0.5, 1.0, 2.0),
         "description": "XLarge - maximum accuracy",

@@ -6,19 +6,26 @@
 BILT training engine.
 
 Handles the full training loop:
-  - Head warm-up with frozen backbone (epochs 0–4), allowing the detection
-    head to stabilise before the backbone starts learning
-  - Backbone unfreeze (epoch 5+) — full end-to-end training from scratch
-  - AdamW optimiser + cosine LR annealing
-  - Gradient clipping
-  - Best-checkpoint saving (lowest validation loss)
+  - Head warm-up with frozen backbone (epochs 0–warmup_epochs), allowing
+    the detection head to stabilise before the backbone starts learning.
+  - Optional linear LR warm-up ramp (epochs 0–lr_warmup_epochs): learning
+    rate starts at 10% of the target value and ramps linearly to full LR.
+  - Backbone unfreeze (epoch warmup_epochs+) — full end-to-end training.
+  - AdamW optimiser + cosine LR annealing.
+  - Gradient clipping.
+  - Optional Exponential Moving Average (EMA) of model weights: produces a
+    smoother parameter trajectory and typically improves generalisation.
+    EMA weights are used when saving the best checkpoint.
+  - Best-checkpoint saving (lowest validation loss).
 """
 
+import copy
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+import torch.nn as nn
 
 from .core import DetectionModel, get_lr_scheduler, get_optimizer, get_optimizer_differential
 from .dataset import create_dataloader
@@ -29,22 +36,105 @@ from .variants import DEFAULT_VARIANT
 logger = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Exponential Moving Average helper
+# ---------------------------------------------------------------------------
+
+class ModelEMA:
+    """
+    Exponential Moving Average of model weights.
+
+    After each optimiser step call ``update()``.  The smoothed weights are
+    stored in ``self.shadow`` and are applied to the model temporarily when
+    the best checkpoint is saved, then immediately restored.
+
+    Parameters
+    ----------
+    model : nn.Module   The model whose parameters are tracked.
+    decay : float       EMA decay (0.999 – 0.9999 typical; higher = smoother).
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.9999):
+        self.decay = decay
+        # Deep-copy the initial weights so shadow is always on CPU float32
+        self.shadow: Dict[str, torch.Tensor] = {
+            name: param.data.clone().float().cpu()
+            for name, param in model.named_parameters()
+            if param.requires_grad
+        }
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        """Blend current model weights into the shadow copy."""
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name] = (
+                    self.decay * self.shadow[name]
+                    + (1.0 - self.decay) * param.data.float().cpu()
+                )
+
+    def apply_to(self, model: nn.Module) -> Dict[str, torch.Tensor]:
+        """
+        Overwrite model parameters with EMA weights.
+
+        Returns the original weights so they can be restored afterwards.
+        """
+        backup: Dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            if name in self.shadow:
+                backup[name] = param.data.clone()
+                param.data.copy_(self.shadow[name].to(param.dtype).to(param.device))
+        return backup
+
+    @staticmethod
+    def restore(model: nn.Module, backup: Dict[str, torch.Tensor]) -> None:
+        """Restore model parameters from a backup dict."""
+        for name, param in model.named_parameters():
+            if name in backup:
+                param.data.copy_(backup[name])
+
+
+# ---------------------------------------------------------------------------
+# Trainer
+# ---------------------------------------------------------------------------
+
 class Trainer:
     """
     Training engine for BILT detectors.
 
     Parameters
     ----------
-    dataset_path  : Path   Root dataset directory (must contain train/ and val/).
-    num_classes   : int    Number of object categories.
-    class_names   : list   Human-readable names for the categories.
-    batch_size    : int    Images per batch (min 2).
-    learning_rate : float  Initial AdamW learning rate.
-    num_epochs    : int    Total training epochs.
-    num_workers   : int    DataLoader worker processes (0 = main process).
-    input_size    : int    Image resolution for training; None = variant default.
-    device        : torch.device
-    variant       : str    BILT model variant (spark / flash / core / pro / max).
+    dataset_path    : Path   Root dataset directory (must contain train/ and val/).
+    num_classes     : int    Number of object categories.
+    class_names     : list   Human-readable names for the categories.
+    batch_size      : int    Images per batch (min 2).
+    learning_rate   : float  Initial AdamW learning rate.
+    num_epochs      : int    Total training epochs.
+    num_workers     : int    DataLoader worker processes (0 = main process).
+    input_size      : int    Image resolution; None = variant default.
+    device          : torch.device
+    variant         : str    BILT model variant (spark/flash/core/pro/max).
+    warmup_epochs   : int    Epochs to freeze the backbone (0 = no freeze).
+    lr_warmup_epochs: int    Epochs for linear LR ramp-up (0 = no ramp).
+                             LR starts at 10 % of learning_rate and ramps to
+                             learning_rate linearly over these epochs.
+    backbone_lr_mult: float  Backbone LR multiplier after unfreeze.
+    weight_decay    : float  AdamW weight decay.
+    cos_lr_min      : float  Cosine scheduler minimum LR.
+    grad_clip       : float  Max gradient norm.
+    focal_alpha     : float  Focal loss alpha.
+    focal_gamma     : float  Focal loss gamma.
+    box_loss_weight : float  Regression loss weight.
+    use_ciou        : bool   CIoU box loss instead of Smooth-L1.
+    augment         : bool   Enable training augmentation.
+    flip_prob       : float  Horizontal flip probability.
+    color_jitter    : tuple  (brightness, contrast, saturation, hue) jitter.
+    cache_images    : bool   Pre-load all images into RAM (recommended for
+                             small datasets — eliminates disk I/O after ep 1).
+    mosaic          : bool   Enable mosaic 4-image augmentation (train only).
+    mosaic_prob     : float  Probability of applying mosaic per sample.
+    use_ema         : bool   Enable Exponential Moving Average of weights.
+    ema_decay       : float  EMA decay factor (higher = slower update).
     """
 
     def __init__(
@@ -61,6 +151,7 @@ class Trainer:
         variant: str = DEFAULT_VARIANT,
         # Training loop
         warmup_epochs: int = 3,
+        lr_warmup_epochs: int = 3,
         backbone_lr_mult: float = 0.1,
         weight_decay: float = 1e-4,
         cos_lr_min: float = 1e-6,
@@ -69,10 +160,17 @@ class Trainer:
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         box_loss_weight: float = 1.0,
+        use_ciou: bool = False,
         # Augmentation
         augment: bool = True,
         flip_prob: float = 0.5,
         color_jitter: Optional[Tuple[float, float, float, float]] = (0.4, 0.4, 0.4, 0.1),
+        cache_images: bool = False,
+        mosaic: bool = False,
+        mosaic_prob: float = 0.5,
+        # EMA
+        use_ema: bool = False,
+        ema_decay: float = 0.9999,
     ):
         self.dataset_path = Path(dataset_path)
         self.num_classes = num_classes
@@ -83,10 +181,13 @@ class Trainer:
         self.num_workers = num_workers
         self.variant = variant
         self.warmup_epochs = warmup_epochs
+        self.lr_warmup_epochs = lr_warmup_epochs
         self.backbone_lr_mult = backbone_lr_mult
         self.weight_decay = weight_decay
         self.cos_lr_min = cos_lr_min
         self.grad_clip = grad_clip
+        self.use_ema = use_ema
+        self.ema_decay = ema_decay
 
         if device is not None:
             self.device = device
@@ -119,6 +220,9 @@ class Trainer:
             augment=augment,
             flip_prob=flip_prob,
             color_jitter=color_jitter,
+            cache_images=cache_images,
+            mosaic=mosaic,
+            mosaic_prob=mosaic_prob,
         )
 
         logger.info("Building validation dataloader …")
@@ -131,6 +235,7 @@ class Trainer:
             input_size=self.input_size,
             training=False,
             pin_memory=_pin,
+            cache_images=cache_images,   # cache val images too — they're tiny
         )
 
         # ------------------------------------------------------------------ #
@@ -141,6 +246,7 @@ class Trainer:
             variant=variant,
             num_classes=num_classes,
             class_names=class_names,
+            use_ciou=use_ciou,
         )
         self.detection_model.to(self.device)
 
@@ -150,13 +256,20 @@ class Trainer:
             alpha=focal_alpha,
             gamma=focal_gamma,
             box_weight=box_loss_weight,
+            use_ciou=use_ciou,
         )
+
+        # ------------------------------------------------------------------ #
+        # EMA                                                                 #
+        # ------------------------------------------------------------------ #
+        self.ema: Optional[ModelEMA] = None
+        if use_ema:
+            self.ema = ModelEMA(self.detection_model.model, decay=ema_decay)
+            logger.info(f"EMA enabled (decay={ema_decay})")
 
         # ------------------------------------------------------------------ #
         # Optimiser and LR scheduler                                         #
         # ------------------------------------------------------------------ #
-        # If warmup is disabled, use differential LR from the start so the
-        # pretrained backbone always trains at a lower rate than the head.
         if warmup_epochs > 0:
             self.optimizer = get_optimizer(
                 self.detection_model.model, learning_rate, weight_decay
@@ -165,7 +278,7 @@ class Trainer:
             self.optimizer = get_optimizer_differential(
                 self.detection_model.model, learning_rate, backbone_lr_mult, weight_decay
             )
-        self.scheduler = get_lr_scheduler(self.optimizer, num_epochs, cos_lr_min)
+        self.scheduler = self._build_scheduler(self.optimizer, num_epochs, lr_warmup_epochs)
 
         # Training state
         self.current_epoch = 0
@@ -173,6 +286,41 @@ class Trainer:
         self.validation_losses: list = []
 
         logger.info("Trainer ready.")
+
+    # ---------------------------------------------------------------------- #
+    # Scheduler builder                                                       #
+    # ---------------------------------------------------------------------- #
+
+    def _build_scheduler(
+        self,
+        optimizer: torch.optim.Optimizer,
+        total_epochs: int,
+        lr_warmup_epochs: int,
+    ) -> torch.optim.lr_scheduler.LRScheduler:
+        """
+        Build a SequentialLR: linear warmup ramp then cosine annealing.
+
+        If lr_warmup_epochs == 0 use pure cosine annealing (original
+        behaviour).
+        """
+        if lr_warmup_epochs > 0:
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=0.1,
+                end_factor=1.0,
+                total_iters=lr_warmup_epochs,
+            )
+            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, total_epochs - lr_warmup_epochs),
+                eta_min=self.cos_lr_min,
+            )
+            return torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup, cosine],
+                milestones=[lr_warmup_epochs],
+            )
+        return get_lr_scheduler(optimizer, total_epochs, self.cos_lr_min)
 
     # ---------------------------------------------------------------------- #
 
@@ -199,6 +347,10 @@ class Trainer:
                 self.detection_model.model.parameters(), max_norm=self.grad_clip
             )
             self.optimizer.step()
+
+            # Update EMA shadow weights after each optimiser step
+            if self.ema is not None:
+                self.ema.update(self.detection_model.model)
 
             epoch_loss += loss.item()
             num_batches += 1
@@ -239,6 +391,23 @@ class Trainer:
 
     # ---------------------------------------------------------------------- #
 
+    def _save_best(self, save_path: Path, class_id_mapping: dict) -> None:
+        """
+        Save the best checkpoint.
+
+        When EMA is enabled, EMA weights are written to disk and then the
+        original weights are immediately restored so training continues
+        unaffected.
+        """
+        if self.ema is not None:
+            backup = self.ema.apply_to(self.detection_model.model)
+            self.detection_model.save(save_path, self.class_names, class_id_mapping)
+            ModelEMA.restore(self.detection_model.model, backup)
+        else:
+            self.detection_model.save(save_path, self.class_names, class_id_mapping)
+
+    # ---------------------------------------------------------------------- #
+
     def train(
         self,
         save_path: Path,
@@ -261,7 +430,10 @@ class Trainer:
             f"Training BILT-{self.variant}  "
             f"epochs={self.num_epochs}  "
             f"input={self.input_size}px  "
-            f"device={self.device}"
+            f"device={self.device}  "
+            f"ema={'on' if self.ema else 'off'}  "
+            f"ciou={'on' if self.detection_model.model.criterion.use_ciou else 'off'}  "
+            f"lr_warmup={self.lr_warmup_epochs}ep"
         )
         t0 = time.time()
         best_val_loss = float("inf")
@@ -269,14 +441,13 @@ class Trainer:
         for epoch in range(self.num_epochs):
             self.current_epoch = epoch
 
-            # Backbone warmup: freeze backbone for the first warmup_epochs so
-            # the randomly-initialised head can stabilise before touching
-            # pretrained features.  warmup_epochs=0 skips this entirely.
+            # ── Backbone freeze / unfreeze ─────────────────────────────────
             if epoch == 0 and self.warmup_epochs > 0:
                 logger.info(
                     f"Warming up: backbone frozen for first {self.warmup_epochs} epochs."
                 )
                 self.detection_model.model.backbone.freeze()
+
             if self.warmup_epochs > 0 and epoch == self.warmup_epochs:
                 logger.info(
                     "Unfreezing backbone with differential LR "
@@ -290,11 +461,15 @@ class Trainer:
                     self.backbone_lr_mult,
                     self.weight_decay,
                 )
-                # Reinitialise the scheduler to track the new optimiser for the
-                # remaining epochs.
+                # Rebuild scheduler for remaining epochs (LR warmup is done
+                # by this point if lr_warmup_epochs <= warmup_epochs).
                 remaining = self.num_epochs - epoch
-                self.scheduler = get_lr_scheduler(self.optimizer, remaining, self.cos_lr_min)
+                remaining_warmup = max(0, self.lr_warmup_epochs - epoch)
+                self.scheduler = self._build_scheduler(
+                    self.optimizer, remaining, remaining_warmup
+                )
 
+            # ── Train / validate ───────────────────────────────────────────
             train_loss = self.train_one_epoch()
             self.training_losses.append(train_loss)
 
@@ -320,6 +495,7 @@ class Trainer:
                     "lr":           current_lr,
                 })
 
+            # ── Save best checkpoint ───────────────────────────────────────
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 class_id_mapping = {
@@ -330,10 +506,11 @@ class Trainer:
                         self.train_loader.dataset, "idx_to_class_id", None
                     ),
                 }
-                self.detection_model.save(
-                    save_path, self.class_names, class_id_mapping
+                self._save_best(save_path, class_id_mapping)
+                ema_note = " (EMA weights)" if self.ema else ""
+                logger.info(
+                    f"  ↳ New best model saved{ema_note} (val_loss={val_loss:.4f})"
                 )
-                logger.info(f"  ↳ New best model saved (val_loss={val_loss:.4f})")
 
         elapsed = time.time() - t0
         logger.info(f"Training finished in {elapsed:.1f}s")

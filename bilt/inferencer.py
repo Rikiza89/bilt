@@ -11,7 +11,7 @@ back to the original image space.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torchvision.transforms as T
@@ -35,6 +35,7 @@ class Inferencer:
     nms_threshold        : float  IoU threshold for NMS
     input_size           : int    resize images to (input_size, input_size)
     device               : torch.device
+    max_detections       : int    keep at most this many detections per image
     """
 
     def __init__(
@@ -83,7 +84,7 @@ class Inferencer:
 
     # ---------------------------------------------------------------------- #
 
-    def preprocess_image(self, image: Image.Image):
+    def preprocess_image(self, image: Image.Image) -> Tuple[torch.Tensor, Tuple[int, int]]:
         """
         Convert a PIL image to a normalised tensor and record the original size.
 
@@ -94,7 +95,6 @@ class Inferencer:
         """
         if image.mode != "RGB":
             image = image.convert("RGB")
-
         original_size = image.size  # (W, H)
         tensor = self._transforms(image).unsqueeze(0).to(self.device)
         return tensor, original_size
@@ -104,10 +104,12 @@ class Inferencer:
     def postprocess_predictions(
         self,
         raw: Dict[str, torch.Tensor],
-        original_size: tuple,
+        original_size: Tuple[int, int],
     ) -> List[Dict[str, Any]]:
         """
         Convert raw model output to a list of detection dicts.
+
+        Coordinate scaling is fully vectorised (no Python loop over boxes).
 
         Parameters
         ----------
@@ -141,39 +143,48 @@ class Inferencer:
         scores = scores[nms_keep]
         labels = labels[nms_keep]
 
-        # Scale boxes from model-input space → original image space
-        orig_w, orig_h = original_size
-        scale_x = orig_w / self.input_size
-        scale_y = orig_h / self.input_size
+        if boxes.numel() == 0:
+            return []
 
         # Cap to max_detections keeping highest-scoring boxes
         if len(scores) > self.max_detections:
             top = scores.argsort(descending=True)[: self.max_detections]
             boxes, scores, labels = boxes[top], scores[top], labels[top]
 
+        # ── Vectorised coordinate scaling ──────────────────────────────────
+        orig_w, orig_h = original_size
+        scale = boxes.new_tensor([orig_w / self.input_size,
+                                  orig_h / self.input_size,
+                                  orig_w / self.input_size,
+                                  orig_h / self.input_size])   # (4,)
+        boxes = (boxes * scale).long()                          # integer pixel coords
+
+        # Clamp to image bounds [all at once]
+        max_vals = boxes.new_tensor([orig_w, orig_h, orig_w, orig_h])
+        boxes = boxes.clamp(min=0).clamp_max(max_vals.unsqueeze(0))
+
+        # Drop degenerate boxes (after clamping)
+        valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+        boxes  = boxes[valid]
+        scores = scores[valid]
+        labels = labels[valid]
+
+        # Convert to Python list of dicts
+        boxes_list  = boxes.tolist()
+        scores_list = scores.tolist()
+        labels_list = labels.tolist()
+
         detections: List[Dict[str, Any]] = []
-        for box, score, label in zip(boxes, scores, labels):
-            x1, y1, x2, y2 = box.tolist()
-
-            x1 = max(0, min(int(x1 * scale_x), orig_w))
-            y1 = max(0, min(int(y1 * scale_y), orig_h))
-            x2 = max(0, min(int(x2 * scale_x), orig_w))
-            y2 = max(0, min(int(y2 * scale_y), orig_h))
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            cls_id = int(label.item())
+        for (x1, y1, x2, y2), score, cls_id in zip(boxes_list, scores_list, labels_list):
             cls_name = (
                 self.class_names[cls_id - 1]
                 if 0 < cls_id <= len(self.class_names)
                 else f"class_{cls_id}"
             )
-
             detections.append({
                 "bbox":       [x1, y1, x2, y2],
-                "score":      float(score.item()),
-                "class_id":   cls_id,
+                "score":      float(score),
+                "class_id":   int(cls_id),
                 "class_name": cls_name,
             })
 
@@ -210,8 +221,44 @@ class Inferencer:
     def detect_batch(
         self, images: List[Image.Image]
     ) -> List[List[Dict[str, Any]]]:
-        """Run detection on a list of PIL images."""
-        return [self.detect(img) for img in images]
+        """
+        Run detection on a list of PIL images in a single forward pass.
+
+        All images are preprocessed to the same resolution, stacked into one
+        batch tensor, and passed through the model together.  This is
+        significantly faster than calling detect() in a loop when a GPU is
+        available.
+
+        Returns
+        -------
+        list of detection lists, one per input image.
+        """
+        if not images:
+            return []
+
+        if self.input_size != self._transforms.transforms[0].size[0]:
+            self._build_transforms()
+
+        # Preprocess all images and record their original sizes
+        tensors: List[torch.Tensor] = []
+        original_sizes: List[Tuple[int, int]] = []
+        for img in images:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            original_sizes.append(img.size)
+            tensors.append(self._transforms(img))
+
+        # Single batched forward pass
+        batch = torch.stack(tensors, dim=0).to(self.device)  # (N, 3, H, W)
+        with torch.no_grad():
+            outputs = self.model(batch)                        # list of N dicts
+
+        return [
+            self.postprocess_predictions(raw, orig_size)
+            for raw, orig_size in zip(outputs, original_sizes)
+        ]
+
+    # ---------------------------------------------------------------------- #
 
     def detect_from_path(self, image_path: Path) -> List[Dict[str, Any]]:
         """Run detection on an image file."""
