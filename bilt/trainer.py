@@ -164,6 +164,8 @@ class Trainer:
     mosaic_prob     : float  Probability of applying mosaic per sample.
     use_ema         : bool   Enable Exponential Moving Average of weights.
     ema_decay       : float  EMA decay factor (higher = slower update).
+                             Note: an auto-decay derived from dataset size is
+                             used in practice; this value is the upper bound.
     """
 
     def __init__(
@@ -298,13 +300,21 @@ class Trainer:
             # Clamped to [0.90, 0.9999] so it works for tiny and large datasets.
             steps_per_epoch = max(1, len(self.train_loader.dataset) // batch_size)
             auto_decay = max(0.90, min(0.9999, 1.0 - 1.0 / (2 * steps_per_epoch)))
-            logger.info(
-                f"EMA auto-decay: dataset={len(self.train_loader.dataset)} "
-                f"batch={batch_size} steps/epoch={steps_per_epoch} "
-                f"→ decay={auto_decay:.4f}"
-            )
+            if abs(auto_decay - ema_decay) > 0.001:
+                logger.info(
+                    f"EMA: auto-decay {auto_decay:.4f} used instead of "
+                    f"user-specified {ema_decay:.4f} "
+                    f"(auto-tuned for dataset={len(self.train_loader.dataset)} "
+                    f"batch={batch_size} steps/epoch={steps_per_epoch})"
+                )
+            else:
+                logger.info(
+                    f"EMA auto-decay: dataset={len(self.train_loader.dataset)} "
+                    f"batch={batch_size} steps/epoch={steps_per_epoch} "
+                    f"→ decay={auto_decay:.4f}"
+                )
             self.ema = ModelEMA(self.detection_model.model, decay=auto_decay)
-            self.ema_decay = auto_decay   # store for reference
+            self.ema_decay = auto_decay   # store actual decay used
 
         # ------------------------------------------------------------------ #
         # Optimiser and LR scheduler                                         #
@@ -428,8 +438,31 @@ class Trainer:
     # ---------------------------------------------------------------------- #
 
     def validate(self) -> float:
-        """Compute validation loss without updating model parameters."""
-        self.detection_model.train()   # loss computation requires train mode
+        """Compute validation loss without updating model parameters.
+
+        The model is kept in train mode so that BILTDetector.forward() takes
+        the loss-computation branch (which requires self.training == True).
+        However, all BatchNorm2d layers are switched to eval mode before the
+        loop so that their running_mean / running_var are NOT updated by the
+        validation batches.
+
+        Without this fix, torch.no_grad() disables gradient computation but
+        does NOT stop BatchNorm from updating its running statistics.  On
+        ResNet-50/101 (which has ~53/104 BN layers), each validation pass
+        overwrites the carefully adapted training-data statistics with noisy
+        validation-batch statistics.  The saved best-checkpoint therefore
+        contains corrupted BN stats, producing degraded feature maps at
+        inference time (eval mode uses running stats) and near-zero
+        confidence scores — i.e. no detections.  MobileNet variants have
+        only ~15-17 BN layers and are far less sensitive to this effect.
+        """
+        self.detection_model.train()   # keep training mode for loss branch
+
+        # Freeze all BN running stats for the duration of the validation loop.
+        for module in self.detection_model.model.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.eval()
+
         epoch_loss = 0.0
         num_batches = 0
 
@@ -444,6 +477,9 @@ class Trainer:
                 loss_dict = self.detection_model(images, targets)
                 epoch_loss += loss_dict["total"].item()
                 num_batches += 1
+
+        # Restore all modules to train mode for the next training epoch.
+        self.detection_model.train()
 
         return epoch_loss / max(num_batches, 1)
 
