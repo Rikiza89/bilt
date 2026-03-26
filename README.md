@@ -25,6 +25,7 @@ install a CUDA-enabled PyTorch build and BILT picks it up for both training and 
 - **Edge-friendly** — works on laptops, Raspberry Pi, and any CPU-only device
 - **Compact checkpoints** — weights stored in float16, halving file size with no inference accuracy loss
 - **Full training control** — every hyperparameter (LR, augmentation, loss, warmup) is exposed and overridable
+- **Advanced training** — CIoU loss, Exponential Moving Average (EMA), LR warmup schedule, mosaic augmentation, image caching
 
 ---
 
@@ -126,6 +127,51 @@ model = BILT("max")     # xlarge — most accurate
 model = BILT("n")       # same as spark
 model = BILT("m")       # same as core
 model = BILT("x")       # same as max
+```
+
+### Advanced training — ResNet (pro / max)
+
+ResNet models benefit significantly from advanced training features. Recommended settings:
+
+```python
+model = BILT("pro")   # or "max"
+
+metrics = model.train(
+    dataset="datasets/my_dataset",
+    epochs=100,
+    batch_size=4,
+    learning_rate=1e-3,
+    # LR warmup — ramp from 10% → 100% over first N epochs
+    lr_warmup_epochs=5,
+    # CIoU regression loss — better geometric alignment than Smooth-L1
+    use_ciou=True,
+    # Exponential Moving Average — smoother weights, better generalisation
+    use_ema=True,
+    ema_decay=0.9999,      # auto-tuned to dataset size; this is the upper cap
+    # Mosaic augmentation — strong regularisation for small datasets
+    mosaic=True,
+    mosaic_prob=0.5,
+    # Image caching — load all training images into RAM once (fast GPUs)
+    cache_images=True,
+)
+```
+
+### Advanced training — MobileNet (spark / flash / core)
+
+```python
+model = BILT("core")
+
+metrics = model.train(
+    dataset="datasets/my_dataset",
+    epochs=80,
+    batch_size=8,
+    learning_rate=2e-3,
+    lr_warmup_epochs=3,
+    use_ciou=True,
+    use_ema=True,
+    mosaic=True,
+    mosaic_prob=0.5,
+)
 ```
 
 ### Batch prediction with annotated images
@@ -266,15 +312,26 @@ Input image (H×W)
   │  Training                  │    │  Inference                   │
   │  Anchor matching           │    │  Box decode + per-class NMS  │
   │  Focal loss + Smooth-L1    │    │  Score filter + top-N cap    │
+  │  or CIoU (optional)        │    │  Batch-GPU inference          │
   └────────────────────────────┘    └──────────────────────────────┘
 ```
 
 **Training losses**
 
-| Loss | Purpose |
-|------|---------|
-| Focal loss (α=0.25, γ=2.0) | Classification — handles class imbalance |
-| Smooth-L1 | Bounding-box regression |
+| Loss | Purpose | Enable with |
+|------|---------|-------------|
+| Focal loss (α=0.25, γ=2.0) | Classification — handles class imbalance | always active |
+| Smooth-L1 | Bounding-box regression (default) | `use_ciou=False` |
+| CIoU | Complete IoU — geometric penalties on centre distance and aspect ratio | `use_ciou=True` |
+
+**BatchNorm behaviour during validation**
+
+During validation, BILT sets all BatchNorm layers to `eval()` mode while keeping the
+parent model in `train()` mode (required for the loss branch). This ensures that
+`running_mean` / `running_var` statistics accumulated during training are never
+overwritten by validation-batch statistics. The best checkpoint saved after each
+validation epoch always reflects clean training-phase statistics — critical for
+ResNet models (53+ BN layers) where stat corruption would otherwise prevent detections.
 
 ---
 
@@ -297,6 +354,9 @@ Input image (H×W)
 | `img_size` | variant default | Override inference resolution |
 | `return_images` | `False` | Return `Results` with annotated images |
 | `max_det` | `300` | Maximum detections to return per image |
+
+When `return_images=False` and a list of images is passed, `predict()` uses
+GPU-batched inference (`detect_batch()`) for maximum throughput.
 
 ### `.train(dataset, epochs, batch_size, ...)`
 
@@ -322,6 +382,13 @@ Input image (H×W)
 | `augment` | `True` | Enable training augmentation |
 | `flip_prob` | `0.5` | Random horizontal flip probability |
 | `color_jitter` | `(0.4,0.4,0.4,0.1)` | Brightness/contrast/saturation/hue jitter |
+| `lr_warmup_epochs` | `0` | Linear LR warmup epochs (0 = disabled). Ramps LR from 10% → 100% |
+| `use_ciou` | `False` | Use CIoU regression loss instead of Smooth-L1 |
+| `use_ema` | `False` | Enable Exponential Moving Average of model weights |
+| `ema_decay` | `0.9999` | EMA decay upper cap (auto-tuned down for small datasets) |
+| `cache_images` | `False` | Cache all training images in RAM (fast when dataset fits in memory) |
+| `mosaic` | `False` | Enable mosaic augmentation (4-image mosaic tiles) |
+| `mosaic_prob` | `0.5` | Probability of applying mosaic to each batch |
 
 ### `.evaluate(dataset, batch_size, conf)`
 
