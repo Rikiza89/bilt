@@ -135,36 +135,28 @@ class BILT:
         self.inferencer.max_detections = max_det
         if img_size is not None:
             self.inferencer.input_size = img_size
+            self.inferencer._build_transforms()
 
         images = self._prepare_source(source)
 
+        # ── Fast path: batched inference (no annotated images needed) ──────
+        if not return_images:
+            pil_images = [self._to_pil(img) for img in images]
+            all_detections = self.inferencer.detect_batch(pil_images)
+            if len(all_detections) == 1:
+                return all_detections[0]
+            return all_detections
+
+        # ── return_images=True path: annotate each image ───────────────────
         all_detections: List[List[Dict]] = []
         original_images: List[Optional[Image.Image]] = []
 
         for img in images:
-            if isinstance(img, (str, Path)):
-                pil_img = Image.open(img).convert("RGB")
-                original_images.append(pil_img if return_images else None)
-                detections = self.inferencer.detect(pil_img)
-            elif isinstance(img, Image.Image):
-                original_images.append(img if return_images else None)
-                detections = self.inferencer.detect(img)
-            elif isinstance(img, np.ndarray):
-                pil_img = Image.fromarray(img).convert("RGB")
-                original_images.append(pil_img if return_images else None)
-                detections = self.inferencer.detect(pil_img)
-            else:
-                raise ValueError(f"Unsupported image type: {type(img)}")
+            pil_img = self._to_pil(img)
+            original_images.append(pil_img)
+            all_detections.append(self.inferencer.detect(pil_img))
 
-            all_detections.append(detections)
-
-        if len(all_detections) == 1 and not return_images:
-            return all_detections[0]
-
-        if return_images:
-            return Results(all_detections, original_images, self.class_names)
-
-        return all_detections
+        return Results(all_detections, original_images, self.class_names)
 
     # ---------------------------------------------------------------------- #
     # Training                                                                #
@@ -184,6 +176,7 @@ class BILT:
         workers: int = 0,
         # Training loop
         warmup_epochs: int = 3,
+        lr_warmup_epochs: int = 0,
         backbone_lr_mult: float = 0.1,
         weight_decay: float = 1e-4,
         cos_lr_min: float = 1e-6,
@@ -192,10 +185,17 @@ class BILT:
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         box_loss_weight: float = 1.0,
+        use_ciou: bool = False,
         # Augmentation
         augment: bool = True,
         flip_prob: float = 0.5,
         color_jitter: Optional[tuple] = (0.4, 0.4, 0.4, 0.1),
+        cache_images: bool = False,
+        mosaic: bool = False,
+        mosaic_prob: float = 0.5,
+        # EMA
+        use_ema: bool = False,
+        ema_decay: float = 0.99,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -214,6 +214,8 @@ class BILT:
         variant          : Override the model variant (``"spark"``…``"max"``).
         workers          : DataLoader worker processes (0 = main process).
         warmup_epochs    : Epochs to keep backbone frozen (0 = no warmup).
+        lr_warmup_epochs : Epochs for linear LR ramp from 10%→100% (0 = off).
+                           Recommended: set equal to warmup_epochs for ResNet.
         backbone_lr_mult : Backbone LR = learning_rate * backbone_lr_mult.
         weight_decay     : AdamW weight decay.
         cos_lr_min       : Cosine annealing minimum learning rate.
@@ -221,11 +223,17 @@ class BILT:
         focal_alpha      : Focal loss alpha (class-balance weight).
         focal_gamma      : Focal loss gamma (focusing strength).
         box_loss_weight  : Regression loss weight relative to classification.
+        use_ciou         : Use CIoU box loss instead of Smooth-L1.
         augment          : Enable/disable training augmentation.
         flip_prob        : Probability of random horizontal flip (0–1).
         color_jitter     : (brightness, contrast, saturation, hue) jitter
                            magnitudes, or None to disable.
-        **kwargs         : Passed through to Trainer for forward-compatibility.
+        cache_images     : Pre-load all images into RAM (recommended for
+                           small datasets — eliminates disk I/O after epoch 1).
+        mosaic           : Enable mosaic 4-image augmentation (train only).
+        mosaic_prob      : Probability of applying mosaic per sample.
+        use_ema          : Enable Exponential Moving Average of weights.
+        ema_decay        : EMA decay factor (higher = slower update).
 
         Returns
         -------
@@ -291,6 +299,7 @@ class BILT:
             device=self.device,
             variant=active_variant,
             warmup_epochs=warmup_epochs,
+            lr_warmup_epochs=lr_warmup_epochs,
             backbone_lr_mult=backbone_lr_mult,
             weight_decay=weight_decay,
             cos_lr_min=cos_lr_min,
@@ -298,9 +307,15 @@ class BILT:
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
             box_loss_weight=box_loss_weight,
+            use_ciou=use_ciou,
             augment=augment,
             flip_prob=flip_prob,
             color_jitter=color_jitter,
+            cache_images=cache_images,
+            mosaic=mosaic,
+            mosaic_prob=mosaic_prob,
+            use_ema=use_ema,
+            ema_decay=ema_decay,
         )
 
         results = trainer.train(model_path)
@@ -462,6 +477,17 @@ class BILT:
                 return sorted(imgs)
             return [p]
         return [source]
+
+    @staticmethod
+    def _to_pil(img) -> Image.Image:
+        """Convert any supported image type to a PIL RGB image."""
+        if isinstance(img, Image.Image):
+            return img.convert("RGB")
+        if isinstance(img, np.ndarray):
+            return Image.fromarray(img).convert("RGB")
+        if isinstance(img, (str, Path)):
+            return Image.open(img).convert("RGB")
+        raise ValueError(f"Unsupported image type: {type(img)}")
 
     def __repr__(self) -> str:
         if self.model is not None:
