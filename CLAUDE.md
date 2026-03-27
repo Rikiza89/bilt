@@ -202,3 +202,4 @@ After warmup, cosine annealing takes over.
 
 **Follow these practices:**
 - ✅ Copy the file's exact structure using git branching
+- ✅ Update this CLAUDE.md after bug fixes or implementation
