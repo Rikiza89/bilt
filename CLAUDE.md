@@ -200,4 +200,4 @@ After warmup, cosine annealing takes over.
 - ❌ Inventing custom sections without user approval
 
 **Follow these practices:**
-- ✅ Copy the file's exact structure
+- ✅ Copy the file's exact structure using git branching
