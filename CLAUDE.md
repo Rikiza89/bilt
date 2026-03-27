@@ -184,3 +184,20 @@ After warmup, cosine annealing takes over.
 | Single and batch inference | `inferencer.py` |
 | Variant hyperparameters | `variants.py` |
 | Dataset loading, mosaic | `dataset.py` |
+
+
+### ⚠️ FOR BUG FIXES AND IMPLEMENTATION ⚠️
+
+**CRITICAL: BEFORE writing any BUG FIX or implementation:**
+
+1. **Read** repository using the Read tool
+2. **Study** the exact structure
+3. **Use repository files as the LITERAL STARTING POINT** - not just inspiration
+4. **Keep all FIXED sections exactly as shown** when no bug fix or implementation is needed
+
+**Avoid:**
+- ❌ Creating existing files from scratch
+- ❌ Inventing custom sections without user approval
+
+**Follow these practices:**
+- ✅ Copy the file's exact structure
