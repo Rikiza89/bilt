@@ -185,6 +185,7 @@ After warmup, cosine annealing takes over.
 | Variant hyperparameters | `variants.py` |
 | Dataset loading, mosaic | `dataset.py` |
 
+---
 
 ### ⚠️ FOR BUG FIXES AND IMPLEMENTATION ⚠️
 
