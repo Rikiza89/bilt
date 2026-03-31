@@ -1,6 +1,6 @@
 # BILT (Because I Like Twice) - A PyTorch-based object detection library
 # Copyright (C) 2026 Rikiza89
-# Licensed under the GNU Affero General Public License v3.0
+# Licensed under the Apache License, Version 2.0
 
 """
 BILT training engine.
@@ -182,7 +182,7 @@ class Trainer:
         variant: str = DEFAULT_VARIANT,
         # Training loop
         warmup_epochs: int = 3,
-        lr_warmup_epochs: int = 3,
+        lr_warmup_epochs: int = 0,
         backbone_lr_mult: float = 0.1,
         weight_decay: float = 1e-4,
         cos_lr_min: float = 1e-6,

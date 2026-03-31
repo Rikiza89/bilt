@@ -1,6 +1,6 @@
 # BILT (Because I Like Twice) - A PyTorch-based object detection library
 # Copyright (C) 2026 Rikiza89
-# Licensed under the GNU Affero General Public License v3.0
+# Licensed under the Apache License, Version 2.0
 
 """
 BILT — Because I Like Twice
@@ -37,7 +37,7 @@ from .utils import set_logging_level
 
 __version__ = "0.2.0"
 __author__ = "Rikiza89"
-__license__ = "AGPL-3.0"
+__license__ = "Apache-2.0"
 
 __all__ = [
     "BILT",

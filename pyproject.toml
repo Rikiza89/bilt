@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "BILT (Because I Like Twice) - A PyTorch-based object detection library"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "AGPL 3.0"}
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Rikiza89"}
 ]

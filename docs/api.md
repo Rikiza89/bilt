@@ -66,6 +66,15 @@ metrics = model.train(
     augment          = True,
     flip_prob        = 0.5,
     color_jitter     = (0.4, 0.4, 0.4, 0.1),
+    mosaic           = False,
+    mosaic_prob      = 0.5,
+    cache_images     = False,
+
+    # Advanced training
+    lr_warmup_epochs = 0,
+    use_ciou         = False,
+    use_ema          = False,
+    ema_decay        = 0.99,
 )
 ```
 
@@ -97,6 +106,13 @@ head can stabilise; after warmup, the backbone is unfrozen and trained at
 | `augment` | bool | `True` | Enable training augmentation |
 | `flip_prob` | float | `0.5` | Random horizontal flip probability (0–1) |
 | `color_jitter` | tuple \| None | `(0.4, 0.4, 0.4, 0.1)` | (brightness, contrast, saturation, hue) jitter, or `None` to disable |
+| `mosaic` | bool | `False` | Enable 4-image mosaic augmentation |
+| `mosaic_prob` | float | `0.5` | Probability of applying mosaic per batch |
+| `cache_images` | bool | `False` | Pre-load all training images into RAM |
+| `lr_warmup_epochs` | int | `0` | Linear LR ramp from 10%→100% over N epochs (0 = disabled). Independent of backbone `warmup_epochs` |
+| `use_ciou` | bool | `False` | Use CIoU regression loss instead of Smooth-L1 |
+| `use_ema` | bool | `False` | Enable Exponential Moving Average of model weights |
+| `ema_decay` | float | `0.99` | EMA decay upper cap (auto-tuned down for small datasets) |
 
 **Returns:** dict with keys:
 
@@ -380,6 +396,13 @@ trainer = Trainer(
     augment=True,
     flip_prob=0.5,
     color_jitter=(0.4, 0.4, 0.4, 0.1),
+    mosaic=False,
+    mosaic_prob=0.5,
+    cache_images=False,
+    lr_warmup_epochs=0,
+    use_ciou=False,
+    use_ema=False,
+    ema_decay=0.99,
 )
 metrics = trainer.train(save_path="weights/best.pth", callback=fn)
 ```

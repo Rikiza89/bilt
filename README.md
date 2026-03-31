@@ -8,7 +8,7 @@ third-party detection model.
 BILT automatically uses a CUDA GPU when one is available. No configuration needed — just
 install a CUDA-enabled PyTorch build and BILT picks it up for both training and inference.
 
-> **License:** GNU Affero General Public License v3.0
+> **License:** Apache License 2.0
 > **Copyright:** © 2026 Rikiza89
 
 ---
@@ -147,7 +147,7 @@ metrics = model.train(
     use_ciou=True,
     # Exponential Moving Average — smoother weights, better generalisation
     use_ema=True,
-    ema_decay=0.9999,      # auto-tuned to dataset size; this is the upper cap
+    ema_decay=0.99,        # auto-tuned to dataset size; this is the upper cap
     # Mosaic augmentation — strong regularisation for small datasets
     mosaic=True,
     mosaic_prob=0.5,
@@ -385,7 +385,7 @@ GPU-batched inference (`detect_batch()`) for maximum throughput.
 | `lr_warmup_epochs` | `0` | Linear LR warmup epochs (0 = disabled). Ramps LR from 10% → 100% |
 | `use_ciou` | `False` | Use CIoU regression loss instead of Smooth-L1 |
 | `use_ema` | `False` | Enable Exponential Moving Average of model weights |
-| `ema_decay` | `0.9999` | EMA decay upper cap (auto-tuned down for small datasets) |
+| `ema_decay` | `0.99` | EMA decay upper cap (auto-tuned down for small datasets) |
 | `cache_images` | `False` | Cache all training images in RAM (fast when dataset fits in memory) |
 | `mosaic` | `False` | Enable mosaic augmentation (4-image mosaic tiles) |
 | `mosaic_prob` | `0.5` | Probability of applying mosaic to each batch |
@@ -410,13 +410,13 @@ Prints a summary of all five variants (static method, callable on the class).
 ## Legal
 
 BILT is an original work by **Rikiza89**, released under the
-**GNU Affero General Public License v3.0**.
+**Apache License, Version 2.0**.
 
 - The detection architecture (FPN neck, detection head, anchor matching,
   focal loss, smooth-L1) is written from scratch and is not derived from any
   other project.
 - Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); weights are downloaded from torchvision's pretrained model hub (ImageNet) at first use.
-- No code from any other AGPL-encumbered project is incorporated.
+- No code from any proprietary or copyleft-encumbered project is incorporated.
 
 See [LICENSE](LICENSE) for the full license text.
 
