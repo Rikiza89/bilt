@@ -8,7 +8,7 @@ third-party detection model.
 BILT automatically uses a CUDA GPU when one is available. No configuration needed — just
 install a CUDA-enabled PyTorch build and BILT picks it up for both training and inference.
 
-> **License:** GNU Affero General Public License v3.0
+> **License:** Apache License 2.0
 > **Copyright:** © 2026 Rikiza89
 
 ---
@@ -410,13 +410,13 @@ Prints a summary of all five variants (static method, callable on the class).
 ## Legal
 
 BILT is an original work by **Rikiza89**, released under the
-**GNU Affero General Public License v3.0**.
+**Apache License, Version 2.0**.
 
 - The detection architecture (FPN neck, detection head, anchor matching,
   focal loss, smooth-L1) is written from scratch and is not derived from any
   other project.
 - Backbone architectures (MobileNet, ResNet) are provided by **torchvision** (BSD/MIT licensed); weights are downloaded from torchvision's pretrained model hub (ImageNet) at first use.
-- No code from any other AGPL-encumbered project is incorporated.
+- No code from any proprietary or copyleft-encumbered project is incorporated.
 
 See [LICENSE](LICENSE) for the full license text.
 
