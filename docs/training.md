@@ -63,6 +63,15 @@ model.train(
     augment          = True,        # enable/disable training augmentation
     flip_prob        = 0.5,         # random horizontal flip probability
     color_jitter     = (0.4, 0.4, 0.4, 0.1),  # (brightness, contrast, saturation, hue)
+    mosaic           = False,       # 4-image mosaic augmentation
+    mosaic_prob      = 0.5,         # probability of applying mosaic per batch
+    cache_images     = False,       # pre-load all training images into RAM
+
+    # Advanced training
+    lr_warmup_epochs = 0,           # linear LR ramp from 10%→100% over N epochs (0 = off)
+    use_ciou         = False,       # CIoU regression loss instead of Smooth-L1
+    use_ema          = False,       # Exponential Moving Average of weights
+    ema_decay        = 0.99,        # EMA decay upper cap (auto-tuned to dataset size)
 )
 ```
 
@@ -127,16 +136,27 @@ model.train(dataset="data/", learning_rate=2e-3, backbone_lr_mult=0.05)
 
 ### Warmup epochs
 
-The backbone starts frozen for `warmup_epochs` (default 3). This lets the
-randomly-initialised detection head stabilise before the pretrained backbone
-starts adapting. After warmup, the backbone unfreezes and trains with a lower LR.
+There are two independent warmup mechanisms — it is important not to confuse them:
+
+| Parameter | What it controls |
+|-----------|-----------------|
+| `warmup_epochs` | Epochs the **backbone is frozen**. Head trains alone; after this the backbone unfreezes at `backbone_lr_mult` × LR. Default: `3`. |
+| `lr_warmup_epochs` | Epochs over which the **learning rate ramps** from 10% → 100% of its target value (LambdaLR schedule). Default: `0` (disabled). |
+
+Both can be used together or independently.
 
 ```python
-# Longer warmup — more stable but slower to adapt
-model.train(dataset="data/", warmup_epochs=5)
+# Only backbone freeze warmup (default)
+model.train(dataset="data/", warmup_epochs=3)
 
-# Skip warmup — backbone trains from epoch 0 at reduced LR
-model.train(dataset="data/", warmup_epochs=0)
+# Only LR ramp warmup
+model.train(dataset="data/", warmup_epochs=0, lr_warmup_epochs=5)
+
+# Both combined — recommended for ResNet models
+model.train(dataset="data/", warmup_epochs=3, lr_warmup_epochs=5)
+
+# Skip all warmup
+model.train(dataset="data/", warmup_epochs=0, lr_warmup_epochs=0)
 ```
 
 ### Image size
@@ -423,6 +443,13 @@ trainer = Trainer(
     augment=True,
     flip_prob=0.5,
     color_jitter=(0.4, 0.4, 0.4, 0.1),
+    mosaic=False,
+    mosaic_prob=0.5,
+    cache_images=False,
+    lr_warmup_epochs=0,
+    use_ciou=False,
+    use_ema=False,
+    ema_decay=0.99,
 )
 
 # Train one epoch at a time

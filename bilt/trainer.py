@@ -182,7 +182,7 @@ class Trainer:
         variant: str = DEFAULT_VARIANT,
         # Training loop
         warmup_epochs: int = 3,
-        lr_warmup_epochs: int = 3,
+        lr_warmup_epochs: int = 0,
         backbone_lr_mult: float = 0.1,
         weight_decay: float = 1e-4,
         cos_lr_min: float = 1e-6,
