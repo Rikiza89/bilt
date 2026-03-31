@@ -37,7 +37,7 @@ from .utils import set_logging_level
 
 __version__ = "0.2.0"
 __author__ = "Rikiza89"
-__license__ = "AGPL-3.0"
+__license__ = "Apache-2.0"
 
 __all__ = [
     "BILT",

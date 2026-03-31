@@ -67,8 +67,8 @@ File sizes reflect float16 checkpoint storage (half the size of float32).
 ## License
 
 BILT is copyright © 2026 Rikiza89 and released under the
-[GNU Affero General Public License v3.0](../LICENSE).
+[Apache License, Version 2.0](../LICENSE).
 
 The detection architecture (FPN neck, detection head, anchor system, focal
-loss) is written from scratch. No code from any other AGPL-encumbered
-project is incorporated.
+loss) is written from scratch. No code from any proprietary or
+copyleft-encumbered project is incorporated.
